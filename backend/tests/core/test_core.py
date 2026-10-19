@@ -200,3 +200,25 @@ def test_persisted_narration_uses_check_output_filtered_text(client, monkeypatch
     d = first(sse(client, f"/api/worlds/{wid}/turns", {"action": "去码头"}), "done")
     assert d["turn"]["narration"] == "【已过滤的叙事】"
     assert client.get(f"/api/worlds/{wid}/turns").json()[-1]["narration"] == "【已过滤的叙事】"
+
+
+def test_god_tick_survives_retry_and_is_seen_by_narration(client):
+    wid = make_world(client)
+    sse(client, f"/api/worlds/{wid}/turns", {"action": "去报馆"})
+    tick = client.post(f"/api/worlds/{wid}/god/tick").json()["events"]
+    tick_ids = {e["id"] for e in tick}
+    assert tick_ids
+    d1 = first(sse(client, f"/api/worlds/{wid}/turns", {"action": "四处打听"}), "done")
+    assert tick_ids <= {e["id"] for e in d1["turn"]["events"]}, "下一回合应编入手动推进事件"
+    d2 = first(sse(client, f"/api/worlds/{wid}/turns/retry"), "done")
+    assert d2["turn"]["id"] != d1["turn"]["id"]
+    all_ids = {e["id"] for e in client.get(f"/api/worlds/{wid}/events", params={"limit": 500}).json()}
+    assert tick_ids <= all_ids, "重试不能清掉手动推进事件"
+    assert tick_ids <= {e["id"] for e in d2["turn"]["events"]}, "重试后的回合仍能看到手动推进事件"
+    trajs = [t for n in client.get(f"/api/worlds/{wid}/god/npcs").json() for t in n["trajectory"]]
+    assert sum(1 for t in trajs if t["turn"] == 1) >= len(tick) - 1
+    mem = [m["content"] for m in client.get(f"/api/worlds/{wid}/memory", params={"limit": 500}).json()]
+    assert any(e["summary"] in mem for e in tick)
+    # 再推进一回合后不再重复编入
+    d3 = first(sse(client, f"/api/worlds/{wid}/turns", {"action": "回家"}), "done")
+    assert not (tick_ids & {e["id"] for e in d3["turn"]["events"]})

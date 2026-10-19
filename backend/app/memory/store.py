@@ -104,7 +104,8 @@ def delete_from_turn(world_id: str, turn: int) -> None:
     上帝视角注入（kind=injected）是用户干预的留痕，重试时保留。"""
     with session_scope() as s:
         ids = [r.id for r in s.exec(select(MemoryRow).where(MemoryRow.world_id == world_id, MemoryRow.turn >= turn,
-                                                            MemoryRow.kind != "injected"))]
+                                                            MemoryRow.kind != "injected"))
+               if (r.refs or {}).get("origin") != "tick"]  # 手动推进的记忆同样保留
         s.exec(delete(MemoryRow).where(col(MemoryRow.id).in_(ids)))  # type: ignore[call-overload]
     for p in ("hash", "dashscope"):
         try:
@@ -134,7 +135,8 @@ async def search(world_id: str, query: str, top_k: int = 5, kinds: list[str] | N
     """Hybrid retrieval: Chroma vector similarity + lexical overlap over the structured table.
     ``before_turn``：只检索该回合之前的记忆（重试最后一回合时排除旧版本）。"""
     rows = {r.id: r for r in list_memories(world_id, limit=5000)
-            if before_turn is None or r.turn < before_turn or r.kind == "injected"}
+            if before_turn is None or r.turn < before_turn or r.kind == "injected"
+            or (r.refs or {}).get("origin") == "tick"}
     if not rows:
         return []
     vecs, provider = await embed([query])

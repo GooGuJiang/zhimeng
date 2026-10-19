@@ -75,6 +75,7 @@ class EventRow(SQLModel, table=True):
     in_world_time: str = ""
     seen: bool = False
     consumed: bool = False  # injected events: woven into narration yet?
+    origin: str = "turn"    # turn | tick（上帝视角手动推进，独立于回合重试保留）| god
     timestamp: datetime = Field(default_factory=utcnow)
 
 
@@ -110,6 +111,7 @@ class TrajectoryRow(SQLModel, table=True):
     location_id: str | None = None
     action: str
     mood: str = ""
+    origin: str = "turn"
     timestamp: datetime = Field(default_factory=utcnow)
 
 
@@ -154,7 +156,22 @@ def get_engine():
             cur.close()
 
         SQLModel.metadata.create_all(_engine)
+        _migrate(_engine)
     return _engine
+
+
+# 轻量迁移：给旧库补新增列（SQLite create_all 不会改已有表）
+_MIGRATIONS = {"events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")]}
+
+
+def _migrate(engine) -> None:  # noqa: ANN001
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        for table, cols in _MIGRATIONS.items():
+            have = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))}
+            for name, ddl in cols:
+                if name not in have:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
 def reset_engine() -> None:

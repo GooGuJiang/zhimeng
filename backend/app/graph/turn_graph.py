@@ -59,6 +59,13 @@ class TurnCtx:
         self.chapter = chapter_of(self.index)
         self.emit = emit
         self.injects = _injections(world.id, reused_inject_ids)
+        # 上帝视角手动推进（tick）在上一回合之后产生的事件：编入本回合叙事；重试时同样可见
+        self.ticks = repo.tick_events_since(world.id, world.state.turn)
+        if replace_index:  # 重试：快照早于 tick，把 tick 造成的 NPC 位置/情绪变化重新应用
+            for r in self.ticks:
+                c = world.char(r.actor_ids[0]) if r.actor_ids else None
+                if c and not c.is_player and r.location_id:
+                    c.location_id = r.location_id
         self.prev_options = current_options(world)
         self.events: list[WorldEvent] = []
         self.npc_updates: list[dict[str, Any]] = []
@@ -192,6 +199,8 @@ async def node_director(state: TurnState) -> TurnState:
         ctx.events.append(WorldEvent(id=r.id, world_id=w.id, type="injected", summary=r.summary, actor_ids=r.actor_ids,
                                      location_id=r.location_id, turn=r.turn, chapter=r.chapter, impact=r.impact,
                                      timestamp=r.timestamp.isoformat(), in_world_time=r.in_world_time, seen=r.seen))
+    for r in ctx.ticks:  # 已落库的手动推进事件（不重复写入）
+        ctx.events.append(repo.event_out(r))
     if tick.get("event"):
         ctx.events.append(_ev(ctx, "world", tick["event"], [], None, tick.get("impact", "low"), time_label))
     focus_line = ""
@@ -333,8 +342,9 @@ async def node_persist(state: TurnState) -> TurnState:
     turn_id = repo.new_id("t")
     try:
         names = {c.id: c.name for c in w.characters}
+        tick_ids = {r.id for r in ctx.ticks}
         for e in ctx.events:
-            if e.type != "injected":
+            if e.type != "injected" and e.id not in tick_ids:
                 repo.add_event(w.id, id=e.id, type=e.type, summary=e.summary, actor_ids=e.actor_ids,
                                location_id=e.location_id, turn=e.turn, chapter=e.chapter, impact=e.impact,
                                in_world_time=e.in_world_time)
@@ -355,7 +365,7 @@ async def node_persist(state: TurnState) -> TurnState:
         mems += [{"content": f, "kind": "fact", **base, "refs": {"turn_id": turn_id}} for f in facts]
         mems += [{"content": f"{names.get(e.actor_ids[0], '') + '：' if e.actor_ids and not e.summary.startswith(names.get(e.actor_ids[0], '?')) else ''}{e.summary}",
                   "kind": "event", **base, "refs": {"event_id": e.id, **({"character_id": e.actor_ids[0]} if e.actor_ids else {})}}
-                 for e in ctx.events if e.type != "injected"]
+                 for e in ctx.events if e.type != "injected" and e.id not in tick_ids]
         await store.add_memories(w.id, mems)
         if w.status == "draft":
             w.status = "active"
@@ -542,7 +552,8 @@ async def god_tick(world_id: str) -> list[WorldEvent]:
         events: list[WorldEvent] = []
         if tick.get("event"):
             events.append(repo.add_event(w.id, type="world", summary=tick["event"], actor_ids=[], location_id=None,
-                                         turn=t, chapter=ch, impact=tick.get("impact", "low"), in_world_time=w.state.time))
+                                         turn=t, chapter=ch, impact=tick.get("impact", "low"), in_world_time=w.state.time,
+                                         origin="tick"))
         for a in acts:
             c = w.char(a["id"])
             if not c:
@@ -551,10 +562,10 @@ async def god_tick(world_id: str) -> list[WorldEvent]:
             c.location_id = a.get("location_id") or c.location_id
             events.append(repo.add_event(w.id, type="offscreen", summary=a["action"], actor_ids=[c.id],
                                          location_id=c.location_id, turn=t, chapter=ch, impact=a.get("impact", "low"),
-                                         in_world_time=w.state.time))
-            repo.add_trajectory(w.id, c.id, t, c.location_id, a["action"][:120], c.mood)
+                                         in_world_time=w.state.time, origin="tick"))
+            repo.add_trajectory(w.id, c.id, t, c.location_id, a["action"][:120], c.mood, origin="tick")
         await store.add_memories(w.id, [{"content": e.summary, "kind": "event", "turn": t, "chapter": ch,
-                                         "refs": {"event_id": e.id, **({"character_id": e.actor_ids[0]} if e.actor_ids else {})}}
+                                         "refs": {"event_id": e.id, "origin": "tick", **({"character_id": e.actor_ids[0]} if e.actor_ids else {})}}
                                         for e in events])
         repo.save_world(w)
         return events

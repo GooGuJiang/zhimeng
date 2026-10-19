@@ -155,18 +155,28 @@ def rollback_from_turn(world_id: str, turn: int) -> None:
 
     with session_scope() as s:
         s.exec(delete(TurnRow).where(TurnRow.world_id == world_id, TurnRow.index >= turn))  # type: ignore[call-overload]
+        # 上帝视角注入（injected）与手动推进（origin=tick）是独立于回合的干预，重试时保留
         s.exec(delete(EventRow).where(EventRow.world_id == world_id, EventRow.turn >= turn,  # type: ignore[call-overload]
-                                      EventRow.type != "injected"))
-        s.exec(delete(TrajectoryRow).where(TrajectoryRow.world_id == world_id, TrajectoryRow.turn >= turn))  # type: ignore[call-overload]
+                                      EventRow.type != "injected", EventRow.origin != "tick"))
+        s.exec(delete(TrajectoryRow).where(TrajectoryRow.world_id == world_id, TrajectoryRow.turn >= turn,  # type: ignore[call-overload]
+                                           TrajectoryRow.origin != "tick"))
         s.exec(delete(SummaryRow).where(SummaryRow.world_id == world_id, SummaryRow.to_turn >= turn))  # type: ignore[call-overload]
     store.delete_from_turn(world_id, turn)
 
 
 # ---------------------------------------------------------------- trajectories / summaries
-def add_trajectory(world_id: str, character_id: str, turn: int, location_id: str | None, action: str, mood: str) -> None:
+def add_trajectory(world_id: str, character_id: str, turn: int, location_id: str | None, action: str, mood: str,
+                   origin: str = "turn") -> None:
     with session_scope() as s:
         s.add(TrajectoryRow(id=new_id("tr"), world_id=world_id, character_id=character_id, turn=turn,
-                            location_id=location_id, action=action, mood=mood))
+                            location_id=location_id, action=action, mood=mood, origin=origin))
+
+
+def tick_events_since(world_id: str, turn: int) -> list[EventRow]:
+    """回合 ``turn`` 之后（含）上帝视角手动推进产生、尚未被回合吸收的事件（时间正序）。"""
+    with session_scope() as s:
+        return list(s.exec(select(EventRow).where(EventRow.world_id == world_id, EventRow.origin == "tick",
+                                                  EventRow.turn >= turn).order_by(EventRow.timestamp)).all())
 
 
 def list_trajectories(world_id: str, character_id: str | None = None) -> list[TrajectoryRow]:
