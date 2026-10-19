@@ -80,7 +80,8 @@ img { max-width: 100%; display: block; }
 .world-chip { font-size: 12px; color: var(--muted); border: 1px solid var(--line); padding: 3px 10px; border-radius: 999px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tabbar { display: none; }
 main.page { flex: 1; width: 100%; max-width: 1320px; margin: 0 auto; padding: clamp(18px, 3vw, 36px) clamp(14px, 3vw, 32px) 64px; }
-.page-enter { animation: page-in 0.55s var(--ease) both; }
+/* fill "backwards" only: a lingering transform/filter would turn main into the containing block of fixed overlays */
+.page-enter { animation: page-in 0.55s var(--ease) backwards; }
 @keyframes page-in { from { opacity: 0; transform: translateY(10px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
 
 @media (max-width: 860px) {
@@ -516,3 +517,19 @@ html[data-motion="off"] .loom-svg .weft { stroke-dashoffset: 0; }
 .rating:disabled { opacity: 0.4; cursor: not-allowed; }
 .world-tile.on { border-color: var(--gold-dim); }
 input[type="range"] { accent-color: var(--gold); }
+
+/* responsive hardening: grid tracks must be allowed to shrink below their content's min width */
+.play-main, .play-side, .preview-grid > *, .god > *, .grid-2 > *, .grid-3 > *, .hero > * { min-width: 0; }
+@media (max-width: 960px) { .preview-grid, .god, .hero { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 860px) {
+  .play { grid-template-columns: minmax(0, 1fr); }
+  .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); }
+  .story { padding: 16px 14px; }
+  .story-head .toolbar .btn.sm { height: 30px; padding: 0 10px; font-size: 12px; }
+  .narr { font-size: calc(16.5px * var(--font-scale)); line-height: 1.9; }
+  .composer-bar .btn { padding: 0 14px; }
+  .h-display { font-size: clamp(30px, 9vw, 44px); }
+  .opt-group { gap: 8px; }
+}
+html, body { overflow-x: hidden; }
+.poster > .poster-img { position: absolute; inset: 0; }

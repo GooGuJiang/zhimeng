@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 /** Accessible modal: role=dialog, Esc / backdrop closes, focus moves inside. */
@@ -27,7 +28,7 @@ export function Dialog({
       prev?.focus?.();
     };
   }, [onClose]);
-  return (
+  return createPortal(
     <div className="dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={ref}
@@ -46,6 +47,7 @@ export function Dialog({
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
