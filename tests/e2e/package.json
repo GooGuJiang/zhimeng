@@ -1,0 +1,17 @@
+{
+  "name": "zhimeng-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test": "playwright test",
+    "test:fallback": "ZM_MODE=fallback playwright test",
+    "test:real": "ZM_MODE=real playwright test",
+    "demo": "playwright test demo.spec.ts --project=demo"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@10.31.0"
+}

@@ -1,0 +1,42 @@
+# data-testid contract used by the Playwright suite (QA → frontend)
+
+Tests look up `data-testid` first and fall back to the visible Chinese label in brackets, so either works —
+but test ids make the suite stable. Page routes are discovered by clicking, not hard-coded.
+
+| Area | data-testid | Fallback text / role | Notes |
+|---|---|---|---|
+| Home | `prompt-input` | textarea/input placeholder containing 一句话 / 主题 | world theme |
+| Home | `generate-btn` | button 「造化」 | starts SSE generation |
+| Home | `minor-mode-toggle` | 「未成年人模式」 | checkbox/switch |
+| Home | `education-entry` | link/button 「教育模式」 | goes to education page |
+| Generation | `generation-progress` | — | visible while progress events stream |
+| Preview | `world-preview` | — | container |
+| Preview | `world-map` | 「地图」 | map with location nodes |
+| Preview | `character-list` | 「角色」 | each item `character-item` |
+| Preview | `initial-conflict` | 「冲突」 | |
+| Preview | `confirm-world-btn` | button 「进入世界」/「确认」 | |
+| Preview | `regenerate-btn` | 「重新生成」 | |
+| Play | `narration` | — | the narration log; latest turn `narration-latest` |
+| Play | `option-btn` | — | every current option button |
+| Play | `free-input` | textarea placeholder containing 行动/输入 | |
+| Play | `send-btn` | button 「发送」/「行动」 | |
+| Play | `thinking-indicator` | — | visible while streaming |
+| Play | `retry-btn` | 「重试」 | |
+| Play | `offscreen-panel` | 「场外」 | off-screen events, items `offscreen-event` |
+| Play | `illustration` | `img` | scene illustration |
+| Play | `audio-player` | `audio` | narration TTS |
+| Play | `genui` | — | generative UI area; each panel `ui-<type>` e.g. `ui-status_panel`, `ui-relationship_graph`, `ui-inventory`, `ui-map` |
+| Play | `ai-label` | 「内容由AI生成」 | AI content marker |
+| Play | `report-btn` | 「举报」 | opens report dialog; submit `report-submit` |
+| Play | `safety-notice` | — | blocked/crisis message |
+| Memory | `memory-query-input` / `memory-query-btn` / `memory-answer` / `citation` | 「回忆」/「记忆」 | F4 query |
+| God | `god-view-btn` | 「上帝视角」 | |
+| God | `npc-card` | — | one per NPC, contains `npc-trajectory` |
+| God | `inject-input` / `inject-btn` | 「插入事件」 | |
+| Save | `export-btn` | 「导出存档」 | downloads JSON |
+| Save | `import-input` | input[type=file] | |
+| Share | `poster-btn` / `poster` | 「海报」 | `poster-download` optional |
+| Share | `video-btn` | 「短视频」 | ending short video export (webm/mp4) |
+| Edu | `edu-source-input` / `edu-generate-btn` | 「课文」/「生成」 | |
+| Edu | `knowledge-card` | 「知识卡」 | |
+| Edu | `edu-summary-btn` / `edu-summary` | 「学习小结」/「小结」 | |
