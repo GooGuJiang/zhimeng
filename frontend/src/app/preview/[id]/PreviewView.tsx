@@ -39,7 +39,10 @@ export function PreviewView({ id }: { id: string }) {
   }, [id]);
 
   const regenerate = async () => {
-    const body = tweak.trim() ? { prompt: tweak.trim() } : {};
+    // v1.1: omitted fields keep the original request, so only the prompt is extended with the tweak.
+    const orig =
+      (world?.state?.flags?.gen_request as { prompt?: string } | undefined)?.prompt ?? world?.premise ?? "";
+    const body = tweak.trim() ? { prompt: `${orig}（调整：${tweak.trim()}）` } : {};
     const { world: w } = await gen.run(streamPath.regenerate(id), body);
     if (w) {
       worldCache.set(w);

@@ -146,6 +146,27 @@ export function usePlay(worldId: string) {
     return () => clearInterval(t);
   }, [loaded, hasImage, worldId]);
 
+  // Opening is a key scene (F5): if the backend produced its illustration but no narration audio,
+  // ask once for TTS of the opening (server caches by text hash, so reloads don't re-synthesise).
+  const openingVoiceAsked = useRef(false);
+  const hasOpeningTurn = turns.some((t) => t.index === 0);
+  const openingImage = assets.some((a) => a.type === "image" && !a.turn_id);
+  const openingAudio = assets.some((a) => a.type === "audio" && !a.turn_id);
+  useEffect(() => {
+    if (!loaded || !world || hasOpeningTurn || openingAudio || !openingImage || openingVoiceAsked.current)
+      return;
+    const text = (world.opening_scene || "").trim();
+    if (!text) return;
+    const t = setTimeout(() => {
+      openingVoiceAsked.current = true;
+      api
+        .tts(worldId, { text: text.slice(0, 600) })
+        .then((a) => setAssets((old) => mergeById(old, [{ ...a, turn_id: null }])))
+        .catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [loaded, world, hasOpeningTurn, openingAudio, openingImage, worldId]);
+
   // ---- typewriter ----
   const typing = !!live && live.text.length < targetText.length;
   useEffect(() => {

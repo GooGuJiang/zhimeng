@@ -25,13 +25,13 @@ export function ReportDialog({
   const submit = async () => {
     setBusy(true);
     try {
-      await api.report({
+      const r = await api.report({
         world_id: worldId,
         turn_id: turnId,
         content: content.slice(0, 4000) || "(空)",
         reason: note.trim() ? `${reason}：${note.trim()}` : reason,
       });
-      toast("举报已收到，感谢你的反馈");
+      toast(r.priority === "high" ? "举报已收到，已标记为优先处理" : "举报已收到，感谢你的反馈");
       onClose();
     } catch (e) {
       toast(`举报提交失败：${(e as Error).message}`);

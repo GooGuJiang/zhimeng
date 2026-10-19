@@ -172,6 +172,8 @@ export interface UIAction {
 }
 export interface UIComponent {
   id: string;
+  ai_generated?: boolean;
+  ai_label?: string;
   type: UIType;
   title: string;
   priority: number;
@@ -184,6 +186,7 @@ export interface Progress {
   stage: string;
   message: string;
   pct: number;
+  percent?: number;
 }
 export interface GenerateWorldRequest {
   prompt: string;

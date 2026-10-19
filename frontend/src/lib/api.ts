@@ -64,7 +64,13 @@ async function request<T>(path: string, init?: RequestInit & { json?: unknown })
 
 export const api = {
   health: () =>
-    request<{ status: string; llm: boolean; models: Record<string, string>; version: string }>("/health"),
+    request<{
+      status: string;
+      llm: boolean;
+      fallback?: boolean;
+      models: Record<string, string>;
+      version: string;
+    }>("/health"),
   listWorlds: () => request<WorldSummary[]>("/worlds"),
   getWorld: (id: string) => request<World>(`/worlds/${id}`),
   deleteWorld: (id: string) => request<{ ok: boolean }>(`/worlds/${id}`, { method: "DELETE" }),
@@ -100,7 +106,10 @@ export const api = {
     request<Asset>(`/worlds/${id}/assets/tts`, { method: "POST", json: body }),
   regenerateAsset: (assetId: string) => request<Asset>(`/assets/${assetId}/regenerate`, { method: "POST" }),
 
-  ui: (id: string) => request<{ components: UIComponent[] }>(`/worlds/${id}/ui`),
+  ui: (id: string, focus?: string) =>
+    request<{ components: UIComponent[] }>(
+      `/worlds/${id}/ui${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`,
+    ),
 
   npcs: (id: string) => request<NpcView[]>(`/worlds/${id}/god/npcs`),
   inject: (
@@ -120,7 +129,10 @@ export const api = {
       "/safety/policy",
     ),
   report: (body: { world_id?: string; turn_id?: string; content: string; reason: string }) =>
-    request<{ id: string; status: string; created_at: string }>("/reports", { method: "POST", json: body }),
+    request<{ id: string; status: string; created_at: string; priority?: "high" | "normal" }>("/reports", {
+      method: "POST",
+      json: body,
+    }),
 
   eduCards: (id: string) => request<KnowledgeCard[]>(`/worlds/${id}/education/cards`),
   eduSummary: (id: string) => request<EducationSummary>(`/worlds/${id}/education/summary`),

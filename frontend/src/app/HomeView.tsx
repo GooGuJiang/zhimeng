@@ -39,6 +39,7 @@ export function HomeView() {
   const [length, setLength] = useState<GenerateWorldRequest["length"]>("short");
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
   const [recent, setRecent] = useState<WorldSummary[]>([]);
+  const [opening, setOpening] = useState(false);
 
   useEffect(() => {
     api
@@ -47,7 +48,7 @@ export function HomeView() {
       .catch(() => setRecent([]));
   }, []);
 
-  const canGo = (prompt.trim().length > 0 || !!file) && !gen.running;
+  const canGo = (prompt.trim().length > 0 || !!file) && !gen.running && !opening;
 
   const go = async () => {
     if (!canGo) return;
@@ -62,9 +63,14 @@ export function HomeView() {
       minor_mode: prefs.minorMode,
       rating: prefs.minorMode ? "all" : "teen",
     };
+    const t0 = Date.now();
     const { world, worldId } = await gen.run(streamPath.generate, body);
     if (world) worldCache.set(world);
-    if (worldId) router.push(`/preview/${worldId}`);
+    if (worldId) {
+      setOpening(true); // keep the loom on screen while the preview route loads
+      await new Promise((r) => setTimeout(r, Math.max(0, 700 - (Date.now() - t0))));
+      router.push(`/preview/${worldId}`);
+    }
   };
 
   const onUpload = async (f: File | undefined) => {
@@ -220,7 +226,15 @@ export function HomeView() {
               <Wand2 size={18} aria-hidden /> 造化
             </button>
           </div>
-          {gen.running ? <GenerationProgress gen={gen} /> : null}
+          {gen.running || opening ? (
+            <GenerationProgress
+              gen={
+                opening
+                  ? { ...gen, progress: { stage: "memory", message: "世界已织就，正在展开…", pct: 100 } }
+                  : gen
+              }
+            />
+          ) : null}
           <p className="faint" style={{ fontSize: 12, margin: "12px 0 0" }}>
             生成内容由 AI 创作并经双向安全审核；未成年人模式下仅生成全年龄内容。
           </p>

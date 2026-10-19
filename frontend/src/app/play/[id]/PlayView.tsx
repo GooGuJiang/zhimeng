@@ -379,6 +379,10 @@ export function PlayView({ id }: { id: string }) {
 
             {p.safety && (p.safety.blocked || p.safety.crisis) ? (
               <SafetyNotice result={p.safety} onClose={p.dismissSafety} />
+            ) : p.safety && !p.busy && (p.safety.categories?.length || p.safety.filtered_text) ? (
+              <div className="notice info" role="status" data-testid="safety-filtered">
+                本回合部分内容已按「{p.safety.rating}」分级过滤或改写。{p.safety.message ?? ""}
+              </div>
             ) : null}
             {p.error && !p.busy ? (
               <div className="notice warn row" role="alert">

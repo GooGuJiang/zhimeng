@@ -210,7 +210,7 @@ export function SettingsView() {
               <div className="stack" style={{ gap: 6, fontSize: 14 }}>
                 <div>
                   模式：
-                  {health.llm ? (
+                  {health.llm && !health.fallback ? (
                     <span className="tag jade">大模型在线</span>
                   ) : (
                     <span className="tag">本地兜底模板（未配置模型密钥）</span>

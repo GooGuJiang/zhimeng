@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 /**
  * The browser only ever talks to this Next app (same origin).
- * /api/* and /static/* are proxied to the FastAPI backend, so API keys stay server-side
+ * /api/* (incl. generated assets at /api/static/assets) is proxied to the FastAPI backend, so API keys stay server-side
  * and no CORS is needed. Override the target with BACKEND_ORIGIN.
  */
 const BACKEND = process.env.BACKEND_ORIGIN ?? "http://localhost:8000";
@@ -14,7 +14,6 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       { source: "/api/:path*", destination: `${BACKEND}/api/:path*` },
-      { source: "/static/:path*", destination: `${BACKEND}/static/:path*` },
     ];
   },
 };

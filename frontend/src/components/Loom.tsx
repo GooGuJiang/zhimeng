@@ -36,7 +36,7 @@ export function Loom({
   title?: string;
 }) {
   const idx = progress ? stages.indexOf(progress.stage) : -1;
-  const pct = Math.max(4, Math.min(100, progress?.pct ?? 4));
+  const pct = Math.max(4, Math.min(100, progress?.pct ?? progress?.percent ?? 4));
   return (
     <div className={`loom${compact ? " compact" : ""}`} data-testid={testId} role="status" aria-live="polite">
       <svg className="loom-svg" viewBox="0 0 100 100" aria-hidden>
