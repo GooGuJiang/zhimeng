@@ -77,6 +77,7 @@ class TurnCtx:
         self.moved = False
         self.arrived: str | None = None
         self.recent = ""
+        self.tasks: dict[str, asyncio.Task[Any]] = {}
 
 
 class TurnState(TypedDict, total=False):
@@ -121,11 +122,76 @@ def _ev(ctx: TurnCtx, type_: str, summary: str, actors: list[str], loc: str | No
 
 
 # ---------------------------------------------------------------- nodes
+def _prepare(ctx: TurnCtx) -> None:
+    """叙事前的同步准备：行动里的目的地先生效（叙事/焦点 NPC 以新地点为准）、最近剧情、焦点 NPC。"""
+    w = ctx.world
+    dest = fallback.detect_location(w, ctx.action)
+    if dest and dest != w.state.player_location_id:
+        w.state.player_location_id, ctx.moved = dest, True
+        if p := w.char("player"):
+            p.location_id = dest
+        ctx.arrived = dest
+    turns = [t for t in repo.list_turns(w.id, limit=4) if t.index < ctx.index][-3:]
+    sums = [s for s in repo.list_summaries(w.id) if s.to_turn < ctx.index]
+    parts = [f"【前情提要】{sums[-1].summary}"] if sums else []
+    parts += [f"[第{t.index}回合] 你：{t.action}\n{t.narration[:220]}" for t in turns]
+    ctx.recent = "\n".join(parts) if parts else f"开场：{w.opening_scene[:200]}"
+    targets = [t for r in ctx.injects for t in (r.actor_ids or [])]
+    ctx.focus = simulation.pick_focus(w, ctx.action, targets)
+
+
+async def _npc_job(ctx: TurnCtx) -> list[dict[str, Any]]:
+    """角色 Agent：焦点 NPC 每回合实时；其余 NPC 每 N 回合批量，或有高影响注入时事件驱动推进。"""
+    w, focus = ctx.world, ctx.focus
+    jobs = []
+    if focus:
+        mems = "；".join(m.content for m in store.list_memories(w.id, limit=200)
+                        if (m.refs or {}).get("character_id") == focus.id and m.turn < ctx.index)[:600]
+
+        async def focus_job() -> list[dict[str, Any]]:
+            fa = await simulation.focus_npc_act(w, focus, ctx.action, mems)
+            fa["focus"] = True
+            return [fa]
+        jobs.append(focus_job())
+    every = max(1, get_settings().npc_batch_every)
+    event_driven = any(r.impact == "high" for r in ctx.injects)
+    if (ctx.index - 1) % every == 0 or event_driven:
+        others = [c for c in w.npcs() if not focus or c.id != focus.id]
+        jobs.append(simulation.batch_npcs_act(w, others, ctx.recent))
+    return [u for part in await asyncio.gather(*jobs) for u in part]
+
+
+def _start_prefetch(ctx: TurnCtx) -> None:
+    """与输入审核并行启动：记忆检索、世界 Agent、角色 Agent（都只产出内部数据，审核通过前不向前端推送任何内容；
+    被拦截则取消）。首字延迟 ≈ max(审核, 检索+Agent 预算) + 旁白首 token。"""
+    _prepare(ctx)
+    w = ctx.world
+    loc = w.loc(w.state.player_location_id)
+    query = f"{ctx.action} {loc.name if loc else ''} " + " ".join(r.summary for r in ctx.injects)
+    every = max(1, get_settings().npc_batch_every)
+    ctx.tasks = {
+        "memory": asyncio.create_task(store.search(w.id, query, top_k=5, before_turn=ctx.index)),
+        "world": asyncio.create_task(simulation.world_agent_tick(w, ctx.recent, with_event=ctx.index % every == 0)),
+        "npcs": asyncio.create_task(_npc_job(ctx)),
+    }
+
+
+def _cancel_prefetch(ctx: TurnCtx) -> None:
+    for t in getattr(ctx, "tasks", {}).values():
+        t.cancel()
+
+
 async def node_safety(state: TurnState) -> TurnState:
     ctx = state["ctx"]
     await _progress(ctx, "safety", "内容安全检查…", 5)
-    v = await guard.check_input(ctx.action, minor_mode=ctx.world.minor_mode, rating=ctx.world.rating, context="turn")
+    _start_prefetch(ctx)
+    try:
+        v = await guard.check_input(ctx.action, minor_mode=ctx.world.minor_mode, rating=ctx.world.rating, context="turn")
+    except BaseException:
+        _cancel_prefetch(ctx)
+        raise
     if v.blocked:
+        _cancel_prefetch(ctx)
         await ctx.emit("safety", v.model_dump())
         return {"blocked": True}
     if v.crisis or v.categories:  # 放行但提示（如危机提示语）
@@ -134,24 +200,10 @@ async def node_safety(state: TurnState) -> TurnState:
 
 
 async def node_memory(state: TurnState) -> TurnState:
-    """F4：生成前先检索已发生事实（向量 + 结构化），并整理最近剧情与章节摘要。"""
+    """F4：生成前先检索已发生事实（向量 + 结构化），并整理最近剧情与章节摘要（检索已在审核时并行启动）。"""
     ctx = state["ctx"]
-    w = ctx.world
     await _progress(ctx, "memory", "翻阅世界记忆…", 15)
-    dest = fallback.detect_location(w, ctx.action)  # 行动里的目的地先生效（叙事/焦点 NPC 以新地点为准）
-    if dest and dest != w.state.player_location_id:
-        w.state.player_location_id, ctx.moved = dest, True
-        if p := w.char("player"):
-            p.location_id = dest
-        ctx.arrived = dest
-    loc = w.loc(w.state.player_location_id)
-    query = f"{ctx.action} {loc.name if loc else ''} " + " ".join(r.summary for r in ctx.injects)
-    cites = await store.search(w.id, query, top_k=5, before_turn=ctx.index)
-    turns = [t for t in repo.list_turns(w.id, limit=4) if t.index < ctx.index][-3:]
-    sums = [s for s in repo.list_summaries(w.id) if s.to_turn < ctx.index]
-    parts = [f"【前情提要】{sums[-1].summary}"] if sums else []
-    parts += [f"[第{t.index}回合] 你：{t.action}\n{t.narration[:220]}" for t in turns]
-    ctx.recent = "\n".join(parts) if parts else f"开场：{w.opening_scene[:200]}"
+    cites = await ctx.tasks["memory"]
     await ctx.emit("memory", {"facts": [c.model_dump() for c in cites]})
     return {"citations": cites}
 
@@ -159,32 +211,13 @@ async def node_memory(state: TurnState) -> TurnState:
 async def node_world(state: TurnState) -> TurnState:
     ctx = state["ctx"]
     await _progress(ctx, "world", "世界 Agent 推进时间线…", 25)
-    every = max(1, get_settings().npc_batch_every)
-    tick = await simulation.world_agent_tick(ctx.world, ctx.recent, with_event=ctx.index % every == 0)
-    return {"world_tick": tick}
+    return {"world_tick": await ctx.tasks["world"]}
 
 
 async def node_npcs(state: TurnState) -> TurnState:
-    """角色 Agent：焦点 NPC 每回合实时；其余 NPC 每 N 回合批量，或有高影响注入时事件驱动推进。"""
     ctx = state["ctx"]
-    w = ctx.world
     await _progress(ctx, "npc", "角色们各自盘算…", 35)
-    targets = [t for r in ctx.injects for t in (r.actor_ids or [])]
-    focus = simulation.pick_focus(w, ctx.action, targets)
-    ctx.focus = focus
-    updates: list[dict[str, Any]] = []
-    if focus:
-        mems = "；".join(m.content for m in store.list_memories(w.id, limit=200)
-                        if (m.refs or {}).get("character_id") == focus.id and m.turn < ctx.index)[:600]
-        fa = await simulation.focus_npc_act(w, focus, ctx.action, mems)
-        fa["focus"] = True
-        updates.append(fa)
-    every = max(1, get_settings().npc_batch_every)
-    event_driven = any(r.impact == "high" for r in ctx.injects)
-    if (ctx.index - 1) % every == 0 or event_driven:
-        others = [c for c in w.npcs() if not focus or c.id != focus.id]
-        updates += await simulation.batch_npcs_act(w, others, ctx.recent)
-    ctx.npc_updates = updates
+    ctx.npc_updates = await ctx.tasks["npcs"]
     return {"npc_done": True}
 
 
@@ -525,7 +558,10 @@ async def _run(world_id: str, req: TurnRequest | None, retry: bool, emit: Emit) 
         action = next((o.text for o in current_options(world) if o.id == req.option_id), action)
     ctx = TurnCtx(world, action, option_id=req.option_id, client_turn_id=req.client_turn_id,
                   replace_index=replace, reused_inject_ids=reused, emit=emit)
-    out = await GRAPH.ainvoke({"ctx": ctx})
+    try:
+        out = await GRAPH.ainvoke({"ctx": ctx})
+    finally:
+        _cancel_prefetch(ctx)  # 失败/拦截时回收并行预取任务
     if out.get("blocked"):
         await emit("done", {"blocked": True})
         return
@@ -572,8 +608,13 @@ async def god_tick(world_id: str) -> list[WorldEvent]:
 
 
 def spawn_opening_media(world: World) -> None:
-    """确认世界后：开局场景插画（后台，不阻塞 confirm 响应）。"""
-    async def job() -> None:
+    """确认世界后：开局关键场景自动生成插画 + 旁白配音（后台并行，不阻塞 confirm 响应）。
+
+    两者都以 ``turn_id=None`` 落库（``GET /api/worlds/{id}/assets`` 中 turn_id 为 null 的行）。配音文本 = opening_scene
+    先过 check_output（按世界的未成年人模式/分级），被拦截则不配音。若第二步补全在确认之后改写了开场，会再生成一组，
+    前端取 turn_id=null 中最新的 image / audio 即可。
+    """
+    async def image() -> None:
         try:
             loc = world.loc(world.state.player_location_id)
             prompt = multimodal.build_scene_prompt(world.model_dump(mode="json"), world.opening_scene,
@@ -581,6 +622,22 @@ def spawn_opening_media(world: World) -> None:
             await multimodal.illustrate(world.id, prompt, minor_mode=world.minor_mode)
         except Exception:  # noqa: BLE001
             log.exception("opening illustration failed")
+
+    async def audio() -> None:
+        try:
+            text = (world.opening_scene or "").strip()
+            if not text:
+                return
+            r = await guard.check_output(text, minor_mode=world.minor_mode, rating=world.rating)
+            if r.blocked:
+                log.warning("opening narration blocked by check_output; skip tts")
+                return
+            await multimodal.speak(world.id, (r.filtered_text or text)[:600], voice="narrator", turn_id=None)
+        except Exception:  # noqa: BLE001
+            log.exception("opening narration failed")
+
+    async def job() -> None:
+        await asyncio.gather(image(), audio())
     _spawn(job())
 
 

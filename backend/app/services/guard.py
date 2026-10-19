@@ -18,7 +18,8 @@ log = logging.getLogger("zhimeng.guard")
 SAFE_NOTICE = "（此段内容未通过安全审核，已被替换。故事仍在继续，请换一个方向推进。）"
 
 
-def _kwargs(fn: Any, *, minor_mode: bool, rating: str | None, context: str | None) -> dict[str, Any]:
+def _kwargs(fn: Any, *, minor_mode: bool, rating: str | None, context: str | None,
+            use_llm: bool | None = None) -> dict[str, Any]:
     try:
         params = inspect.signature(fn).parameters
     except (TypeError, ValueError):
@@ -31,6 +32,8 @@ def _kwargs(fn: Any, *, minor_mode: bool, rating: str | None, context: str | Non
             kw["max_rating"] = rating
     if context is not None and "context" in params:
         kw["context"] = context
+    if use_llm is not None and "use_llm" in params:
+        kw["use_llm"] = use_llm
     return kw
 
 
@@ -52,10 +55,12 @@ async def check_input(text: str, *, minor_mode: bool = False, rating: str = "tee
         return _failsafe(text, minor_mode=minor_mode, output=False)
 
 
-async def check_output(text: str, *, minor_mode: bool = False, rating: str = "teen") -> SafetyResult:
+async def check_output(text: str, *, minor_mode: bool = False, rating: str = "teen",
+                       use_llm: bool | None = None) -> SafetyResult:
+    """use_llm=False：只走关键词/规则层（秒级预览用）；None：由安全模块默认策略决定。"""
     fn = safety.check_output
     try:
-        return _coerce(await fn(text, **_kwargs(fn, minor_mode=minor_mode, rating=rating, context=None)))
+        return _coerce(await fn(text, **_kwargs(fn, minor_mode=minor_mode, rating=rating, context=None, use_llm=use_llm)))
     except Exception as e:  # noqa: BLE001
         log.exception("safety.check_output failed → fail-safe keyword check: %s", e)
         return _failsafe(text, minor_mode=minor_mode, output=True)
@@ -117,7 +122,7 @@ class ChunkFilter:
 
     def feed(self, chunk: str) -> str:
         self.buf += chunk
-        if len(self.buf) <= self.hold * 2:
+        if len(self.buf) <= self.hold:  # 只延迟尾部 hold 个字符，其余即刻透传（细粒度增量）
             return ""
         filtered = filter_chunk(self.buf, minor_mode=self.minor_mode)
         if len(filtered) != len(self.buf):  # 遮蔽改变了长度：整体输出，避免错位

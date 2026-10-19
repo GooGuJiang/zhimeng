@@ -48,6 +48,9 @@ type World = { id: string; title: string; genre: string; tone: string; era: stri
                knowledge_cards: KnowledgeCard[];      // education mode (empty otherwise)
                state: WorldState; rating: Rating; minor_mode: boolean; status: "draft"|"active"|"ended";
                created_at: string; updated_at: string; source: "llm" | "fallback";
+               opening_options: Option[];             // v1.2 documented: turn-0 options (same as GET /options at turn 0)
+               detail_status: "enriching" | "complete" | "local";   // v1.2 two-step generation, see F1
+               gen_request: GenerateWorldRequest | null;            // v1.2: original generation request (incl. last `refine`)
                ai_generated: true; ai_label: string }
 type WorldSummary = { id; title; genre; tone; mode; turn: number; status; created_at; updated_at }
 type Option = { id: string; text: string; hint?: string }
@@ -72,7 +75,7 @@ type UIComponent = {
   type: "status_panel" | "relationship_graph" | "inventory" | "map" | "event_feed" | "knowledge_cards" | "choice_list";
   title: string;
   priority: number;               // higher = more prominent; layout hint derived from current plot
-  layout: { area: "main" | "side" | "bottom"; size: "sm" | "md" | "lg" };
+  layout: { area: "main" | "side" | "bottom"; size: "sm" | "md" | "lg" };  // v1.2: "bottom" = has a dedicated region (see below)
   props: object;                  // per type, below
   actions: { id: string; label: string; kind: "turn"|"god_inject"|"query"|"navigate"; payload: object }[];
   openui?: string;                // optional OpenUI-lang hint text; frontend may ignore
@@ -86,24 +89,41 @@ props by type:
 - `event_feed`: `{ events: WorldEvent[] }` (latest off-screen events)
 - `knowledge_cards`: `{ cards: KnowledgeCard[] }` (education mode only)
 - `choice_list`: `{ options: Option[] }`
+`layout.area` (v1.2): `main` = narrative-adjacent panels, `side` = side panel, `bottom` = **dedicated areas**. `event_feed` and
+`choice_list` are always `area:"bottom"`; they mirror the 场外大事件 panel (`event` stream / `GET /events`) and the option buttons
+(`options` event), so a client that already has those dedicated areas may skip them in the side panel (current frontend behaviour).
 Action `kind: "turn"` → POST `/api/worlds/{id}/turns` with `payload` as body (`{action}`); `"navigate"` payload `{location_id}` → send as turn action `"前往<地点名>"` (payload contains ready `action` string too).
 
 ## Endpoints
 
 ### Health
-`GET /api/health` → `{ "status": "ok", "llm": bool /* key configured */, "models": {"chat": str, "fast": str, "embedding": str, "image": str, "tts": str}, "version": str }`
+`GET /api/health` → `{ "status": "ok", "llm": bool /* key configured */, "models": {"chat": str, "fast": str, "skeleton": str, "embedding": str, "image": str, "tts": str, "chat_chain": [str], "fast_chain": [str]}, "llm_runtime": {"last_model": str|null, "switches": int, "cooling": [str]}, "version": str }`
 
 ### F1 World generation
 `POST /api/worlds/generate` (SSE)
 Body `GenerateWorldRequest`:
 ```json
 { "prompt": "一个民国上海滩的侦探故事，我是报社记者", "genre": "悬疑?", "tone": "?", "length": "short|medium|long", "language": "zh",
-  "mode": "story", "source_text": null, "minor_mode": false, "rating": "teen" }
+  "mode": "story", "source_text": null, "minor_mode": false, "rating": "teen", "wait_details": false }
 ```
-Events: `progress` (stages: `safety`,`outline`,`locations`,`characters`,`conflict`,`persist`,`memory`), `token` (optional raw text while LLM drafts), `world` (World), `safety` (if blocked), `done` `{ "world_id": str, "source": "llm"|"fallback" }`, `error`.
+Events: `progress` (stages: `safety`,`outline`,`locations`,`characters`,`conflict`,`persist`,`memory`,`done`), `token` (optional raw text while LLM drafts), `world` (World), `safety` (if blocked), `done` `{ "world_id": str, "source": "llm"|"fallback", "detail_status": "enriching"|"complete"|"local" }`, `error`.
+**Two-step generation (v1.2).** Step 1: a fast model (`qwen-flash` chain) drafts a skeleton → local rules fill it into a playable world →
+`world` (with `detail_status:"enriching"`) → `done` — target preview ≤5 s. Step 2 runs in the background (`qwen-plus` chain) and merges
+details **keeping title, ids and names**; then `detail_status` becomes `complete`, or `local` if step 2 failed (skeleton world filled by
+local rules, still playable). Client: after `done`, poll `GET /api/worlds/{id}` (e.g. every 2–3 s) while `detail_status==="enriching"`.
+`wait_details:true` keeps the SSE open and pushes a second `world` before `done` instead. Without a key / with `ZM_FORCE_FALLBACK=1`
+there is one step: `detail_status:"complete"`, `source:"fallback"`.
 `POST /api/worlds` (non-streaming, same body) → `World`.
 `POST /api/worlds/{id}/regenerate` (SSE, optional body overrides of GenerateWorldRequest) → regenerates the draft in place (same id; same events).
-`POST /api/worlds/{id}/confirm` → `World` (status → `active`).
+v1.2: body may carry `"refine": "多一点悬疑，主角换成女记者"` — applied **on top of** the original request (`World.gen_request`; server sends
+`<original prompt>\n补充要求：<refine>` to the model). The original `prompt` is not modified; `gen_request.refine` stores the latest refine and a
+later regenerate without `refine` keeps it; send `"refine": ""` to clear. `World.gen_request` is the formal field
+(`state.flags.gen_request` is kept as a deprecated alias with the same content).
+`POST /api/worlds/{id}/confirm` → `World` (status → `active`). v1.2: confirm auto-generates the **opening key-scene assets** in the background:
+an illustration **and** a narrator audio (`opening_scene`, passed through `check_output` first; not voiced if blocked). Both are stored with
+`turn_id=null`; fetch with `GET /api/worlds/{id}/assets` and take the newest `type:"image"` / `type:"audio"` rows with `turn_id===null`
+(if step-2 enrichment rewrites the opening after confirm, a new pair is generated). There is no SSE `asset` event for the opening
+(confirm is a plain JSON call); poll `/assets` a few times (fallback: ~instant; real: image 10–30 s, audio 3–10 s).
 `GET /api/worlds` → `WorldSummary[]` · `GET /api/worlds/{id}` → `World` · `DELETE /api/worlds/{id}` → `{ "ok": true }`
 `PATCH /api/worlds/{id}/settings` body `{ "minor_mode"?: bool, "rating"?: Rating }` → `World`
 
@@ -112,6 +132,8 @@ Events: `progress` (stages: `safety`,`outline`,`locations`,`characters`,`conflic
 Body: `{ "action": "我去码头找线人", "option_id": "opt_2" | null, "client_turn_id": "uuid?" }`
 (`client_turn_id` is an idempotency key: re-sending a committed id returns the committed turn as `done` immediately.)
 Events in order: `progress`(stages `safety`,`memory`,`world`,`npc`,`director`,`narrate`,`extract`,`persist`) → `memory` → `event` → `token`* → `options` → `ui` → `asset`* (key scenes) → `done` `{ "turn": Turn, "state": WorldState }`.
+`token` granularity (v1.2): real-model deltas are passed through as they arrive (only the last 8 chars are held back for the safety filter
+and flushed at the end); fallback narration is sent in 3-char chunks paced by `STREAM_DELAY`.
 On `error` nothing is committed; resend the same body (or use retry below).
 `POST /api/worlds/{id}/turns/retry` (SSE, empty body) → regenerates the **last** turn from its pre-turn snapshot (same action), same events.
 `GET /api/worlds/{id}/turns?limit=50` → `Turn[]` (ascending)
@@ -153,7 +175,9 @@ Turn streams also emit a full `ui` event.
 `POST /api/safety/check` body `{ "text": str, "minor_mode"?: bool }` → `SafetyResult`
 `GET /api/safety/policy` → `{ "ratings": [...], "minor_mode": {...}, "crisis_message": str, "ai_label": str }`
 `POST /api/reports` body `{ "world_id"?: str, "turn_id"?: str, "content": str, "reason": str }` → `{ "id", "status": "received", "created_at" }`
-`GET /api/reports` → list
+`GET /api/reports?world_id=<id>` → reports of that world only (v1.2: `world_id` **required**).
+`GET /api/reports` without `world_id` (full list) requires header `X-Admin-Token` equal to env `ZM_ADMIN_TOKEN`; if the env var is unset the
+full list is disabled → `403 {"detail", "code": "forbidden"}`.
 Input blocked → turn/generate stream emits `safety` (blocked=true) then `done {"blocked": true}`; HTTP 200. Crisis content (self-harm etc.) → `safety` with `crisis=true` and `message` containing help hotline.
 
 ### F10 Education mode
@@ -175,3 +199,17 @@ Input blocked → turn/generate stream emits `safety` (blocked=true) then `done 
 - `POST /api/worlds/{id}/god/inject` returns HTTP 400 `{detail, code:"bad_request"}` when the content is blocked by safety; `POST /worlds/import` 400 for an invalid save.
 - `POST /api/worlds/{id}/assets/tts` returns 400 if the text fails `check_output`.
 - `regenerate` body: any `GenerateWorldRequest` field; omitted fields keep the original request.
+
+### v1.2 (2026-10-19, backend core) — additive except `GET /api/reports` scoping
+- F1 two-step world generation: `World.detail_status`, `GenerateWorldRequest.wait_details`, `done.detail_status`, progress stage `done`;
+  poll `GET /api/worlds/{id}` while `enriching`. Education generate supports `wait_details` too.
+- LLM model fallback chain on 429 / rate limit / disconnect / unknown model (configurable in `config.py` / env:
+  `CHAT_MODEL_CHAIN`, `FAST_MODEL_CHAIN`, `SKELETON_MODEL_CHAIN`, `SKELETON_MODEL`, `MODEL_COOLDOWN_S`); local templates only when the whole chain fails.
+  `GET /api/health` adds `models.skeleton/chat_chain/fast_chain` and `llm_runtime`.
+- Retrying the last turn keeps god-view manual tick events; the retried narration still sees them.
+- Opening key scene: image **and** narrator audio auto-generated on confirm (`turn_id=null` assets).
+- Regenerate `refine` field; `World.gen_request` documented as a formal field (`state.flags.gen_request` = deprecated alias).
+- `GET /api/reports` requires `world_id`; full list only with `X-Admin-Token` == `ZM_ADMIN_TOKEN` (disabled when unset). **Breaking** for
+  callers that listed all reports without `world_id`.
+- Fine-grained `token` deltas (see F2); a real-model narration stream that breaks mid-way is resumed by continuation instead of failing.
+- `layout.area` semantics for `event_feed` / `choice_list` (dedicated areas); `World.opening_options` documented.

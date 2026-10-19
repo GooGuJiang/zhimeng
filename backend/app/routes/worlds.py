@@ -36,9 +36,13 @@ async def create(req: GenerateWorldRequest):
 @router.post("/worlds/{world_id}/regenerate")
 async def regenerate(world_id: str, overrides: dict[str, Any] | None = Body(default=None)):
     w = world_or_404(world_id)
-    base = dict(w.state.flags.get("gen_request") or {"prompt": w.premise, "mode": w.mode, "rating": w.rating,
-                                                     "minor_mode": w.minor_mode})
+    base = dict(w.gen_request or w.state.flags.get("gen_request") or {"prompt": w.premise, "mode": w.mode,
+                                                                     "rating": w.rating, "minor_mode": w.minor_mode})
+    base.pop("wait_details", None)
+    # 请求体可选：任意 GenerateWorldRequest 字段作覆盖；refine = 叠加在原始 prompt 上的修改意见（"" 清除）
     base.update({k: v for k, v in (overrides or {}).items() if v is not None and k in GenerateWorldRequest.model_fields})
+    if base.get("refine") == "":
+        base["refine"] = None
     req = GenerateWorldRequest(**base)
     edu = w.state.flags.get("edu")
 

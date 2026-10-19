@@ -6,6 +6,7 @@ written while the other provider was active.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -139,7 +140,10 @@ async def search(world_id: str, query: str, top_k: int = 5, kinds: list[str] | N
             or (r.refs or {}).get("origin") == "tick"}
     if not rows:
         return []
-    vecs, provider = await embed([query])
+    try:  # 实时检索预算：远程向量超时 → 本地哈希向量（混合打分里仍有词法分）
+        vecs, provider = await asyncio.wait_for(embed([query]), timeout=get_settings().retrieval_budget_s)
+    except asyncio.TimeoutError:
+        vecs, provider = [hash_embed(query)], "hash"
     scores: dict[str, float] = {}
     try:
         coll = _collection(provider)

@@ -8,13 +8,13 @@ from typing import Any
 
 from app.agents import fallback, prompts
 from app.config import get_settings
-from app.llm.client import LLMUnavailable, chat_json, chat_stream, chat_text, llm_enabled
+from app.llm.client import LLMUnavailable, chat_json, chat_stream_resumable, chat_text, llm_enabled
 from app.schemas import Citation, World
 
 log = logging.getLogger("zhimeng.director")
 
 
-def _chunks(text: str, size: int = 8) -> list[str]:
+def _chunks(text: str, size: int = 3) -> list[str]:
     return [text[i:i + size] for i in range(0, len(text), size)]
 
 
@@ -26,8 +26,8 @@ async def narrate_stream(world: World, action: str, *, memory_ctx: str, recent: 
         msgs = prompts.director_messages(world, action, memory_ctx, recent, npc_ctx, events_ctx, inject_ctx,
                                          world.minor_mode)
         got = False
-        try:
-            async for chunk in chat_stream(msgs, temperature=0.85, max_tokens=900):
+        try:  # 首字后断流：带已输出部分续写（chat_stream_resumable），续写用尽才放弃本回合（不提交、可重试）
+            async for chunk in chat_stream_resumable(msgs, temperature=0.85, max_tokens=900):
                 got = True
                 yield "llm", chunk
             if got:

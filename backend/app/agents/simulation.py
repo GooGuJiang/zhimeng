@@ -5,6 +5,7 @@ LLM 用 fast_model（qwen-turbo）控制成本；无 key / 报错 → 确定性�
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -12,6 +13,15 @@ from app.agents import fallback, prompts
 from app.config import get_settings
 from app.llm.client import chat_json, llm_enabled
 from app.schemas import Character, World
+
+
+async def _budget(coro: Any, scale: float = 1.0) -> Any:
+    """实时 Agent 调用的延迟预算：超时返回 None（调用方走本地规则），保证旁白首字延迟。"""
+    try:
+        return await asyncio.wait_for(coro, timeout=get_settings().agent_budget_s * scale)
+    except asyncio.TimeoutError:
+        log.info("agent call over budget (%.1fs), using local rules", get_settings().agent_budget_s)
+        return None
 
 log = logging.getLogger("zhimeng.sim")
 
@@ -58,8 +68,8 @@ async def focus_npc_act(world: World, c: Character, action: str, memories: str) 
     """角色 Agent（焦点，实时）：对玩家行动作出反应。"""
     s = get_settings()
     if llm_enabled():
-        d = await chat_json(prompts.npc_focus_messages(world, c, action, memories), model=s.fast_model,
-                            temperature=0.8, max_tokens=400)
+        d = await _budget(chat_json(prompts.npc_focus_messages(world, c, action, memories), model=s.fast_model,
+                            temperature=0.8, max_tokens=400))
         if d and d.get("action"):
             try:
                 aff = max(-10, min(10, int(d.get("affinity_delta") or 0)))
@@ -82,8 +92,8 @@ async def batch_npcs_act(world: World, chars: list[Character], recent: str) -> l
     s = get_settings()
     loc_ids = {l.id for l in world.locations}
     if llm_enabled():
-        d = await chat_json(prompts.npc_batch_messages(world, chars, recent), model=s.fast_model,
-                            temperature=0.9, max_tokens=900)
+        d = await _budget(chat_json(prompts.npc_batch_messages(world, chars, recent), model=s.fast_model,
+                            temperature=0.9, max_tokens=900))
         acts = [a for a in (d or {}).get("actions") or [] if isinstance(a, dict)]
         by_id = {c.id: c for c in chars}
         out = []
@@ -119,8 +129,8 @@ async def world_agent_tick(world: World, recent: str, with_event: bool) -> dict[
     if not with_event:
         return res
     if llm_enabled():
-        d = await chat_json(prompts.world_agent_messages(world, recent), model=get_settings().fast_model,
-                            temperature=0.9, max_tokens=300)
+        d = await _budget(chat_json(prompts.world_agent_messages(world, recent), model=get_settings().fast_model,
+                            temperature=0.9, max_tokens=300))
         if d and str(d.get("event") or "").strip():
             res["event"] = str(d["event"])[:120]
             res["impact"] = d.get("impact") if d.get("impact") in ("low", "medium", "high") else "low"

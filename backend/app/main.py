@@ -30,6 +30,11 @@ ROUTE_MODULES = ["worlds", "play", "memory", "god", "media", "ui", "safety", "ed
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     get_engine()  # 建表
+    try:  # 上次进程退出时仍在后台补全的世界：重新排队（或标记 local），避免永远停在 enriching
+        from app.agents.world_builder import resume_stale_enrichment
+        resume_stale_enrichment()
+    except Exception:  # noqa: BLE001
+        logging.getLogger("zhimeng").exception("resume stale enrichment failed")
     yield
 
 
@@ -41,7 +46,7 @@ app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in settings.co
 
 @app.exception_handler(HTTPException)
 async def _http_error(_: Request, exc: HTTPException):
-    code = {400: "bad_request", 404: "not_found", 409: "conflict", 422: "validation_error"}.get(exc.status_code, "error")
+    code = {400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict", 422: "validation_error"}.get(exc.status_code, "error")
     return JSONResponse({"detail": exc.detail, "code": code}, status_code=exc.status_code)
 
 

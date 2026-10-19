@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     chat_model_chain: str = "qwen-plus,qwen-plus-latest,qwen-max,qwen-turbo,qwen-flash"
     fast_model_chain: str = "qwen-turbo,qwen-flash,qwen-plus,qwen-plus-latest"
     skeleton_model_chain: str = "qwen-flash,qwen-turbo,qwen-plus"
+    # GET /api/reports 不带 world_id 的全量列表需要请求头 X-Admin-Token 与之一致；未设置 → 全量列表禁用
+    zm_admin_token: str = ""
+    # 实时回合延迟预算（首字 ≤2s 目标）：叙事前的世界/角色 Agent 与记忆向量检索超时即用本地规则，不拖慢旁白
+    agent_budget_s: float = 2.0
+    retrieval_budget_s: float = 1.2
     model_cooldown_s: float = 30.0       # 限流/断连后该模型冷却时间（期间优先跳过）
     embedding_model: str = "text-embedding-v3"
     embedding_dim: int = 1024

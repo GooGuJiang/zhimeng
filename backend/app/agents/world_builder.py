@@ -11,7 +11,7 @@ from typing import Any
 
 from app.agents import fallback, prompts
 from app.config import get_settings
-from app.llm.client import LLMUnavailable, chat_json, chat_stream, llm_enabled, parse_json
+from app.llm.client import LLMUnavailable, chat_stream, chat_stream_resumable, llm_enabled, parse_json
 from app.memory import store
 from app.schemas import (Character, GenerateWorldRequest, Item, KnowledgeCard, Location, Option,
                          PlayerInfo, World, WorldState)
@@ -133,21 +133,29 @@ def _prog(stage: str, msg: str, pct: int) -> Event:
     return "progress", {"stage": stage, "message": msg, "pct": pct, "percent": pct}
 
 
-async def _stream_skeleton(msgs: list[dict[str, str]], holder: dict[str, Any]) -> AsyncIterator[Event]:
-    """第一步：快速模型流式起草骨架 JSON，按出现的字段推送进度；结果放进 holder。"""
-    buf, seen = "", set()
-    meta: dict[str, Any] = {}
-    try:
-        async for chunk in chat_stream(msgs, model=get_settings().skeleton_model, temperature=0.9, max_tokens=900, meta=meta):
-            buf += chunk
-            for key, stage, msg, pct in SKELETON_KEYS:
-                if key in buf and key not in seen:
-                    seen.add(key)
-                    yield _prog(stage, msg, pct)
-    except LLMUnavailable as e:
-        log.warning("skeleton LLM failed: %s", e)
-        return
-    holder["data"], holder["model"] = parse_json(buf), meta.get("model")
+async def _stream_skeleton(msgs: list[dict[str, str]], holder: dict[str, Any], attempts: int = 3) -> AsyncIterator[Event]:
+    """第一步：快速模型流式起草骨架 JSON，按出现的字段推送进度；结果放进 holder。
+    流在中途断开时整段重来（出错模型已进入冷却，模型链会自动换下一个），最多 ``attempts`` 次。"""
+    seen: set[str] = set()
+    for i in range(attempts):
+        buf = ""
+        meta: dict[str, Any] = {}
+        try:
+            async for chunk in chat_stream(msgs, model=get_settings().skeleton_model, temperature=0.9, max_tokens=900, meta=meta):
+                buf += chunk
+                for key, stage, msg, pct in SKELETON_KEYS:
+                    if key in buf and key not in seen:
+                        seen.add(key)
+                        yield _prog(stage, msg, pct)
+        except LLMUnavailable as e:
+            log.warning("skeleton attempt %d failed: %s", i + 1, e)
+            if not buf:  # 整条模型链首字前就失败 → 不再重试
+                return
+            continue
+        data = parse_json(buf)
+        if data:
+            holder["data"], holder["model"], holder["attempts"] = data, meta.get("model"), i + 1
+            return
 
 
 def skeleton_to_data(sk: dict[str, Any], req: GenerateWorldRequest, edu: dict[str, Any] | None) -> dict[str, Any]:
@@ -207,17 +215,33 @@ def skeleton_to_data(sk: dict[str, Any], req: GenerateWorldRequest, edu: dict[st
     return data
 
 
-async def _filter_world_text(world: World, req_minor: bool, rating: str) -> None:
-    """入库文本一律使用 check_output 的 filtered_text（None 时回退原文）。"""
-    for field in ("opening_scene", "setting", "initial_conflict", "premise"):
-        orig = getattr(world, field)
-        if orig:
-            r = await guard.check_output(orig, minor_mode=req_minor, rating=rating)
-            setattr(world, field, guard.SAFE_NOTICE if r.blocked and not r.filtered_text else (r.filtered_text or orig))
-    for c in world.characters:
-        if c.persona:
-            r = await guard.check_output(c.persona, minor_mode=req_minor, rating=rating)
-            c.persona = r.filtered_text or c.persona
+_SEP = "\n¶¶\n"
+
+
+async def _filter_world_text(world: World, req_minor: bool, rating: str, use_llm: bool | None = None) -> bool:
+    """入库文本一律使用 check_output 的 filtered_text（None 时回退原文）。所有字段拼成一次调用（控制审核延迟）；
+    返回是否被硬拦截。use_llm=False 只走关键词/规则层（骨架预览），补全阶段再做完整（含大模型）审核。"""
+    fields = [("w", f) for f in ("opening_scene", "setting", "initial_conflict", "premise", "title")]
+    fields += [("c", c.id) for c in world.npcs()]
+
+    def get(kind: str, key: str) -> str:
+        return getattr(world, key) if kind == "w" else (world.char(key).persona or "")  # type: ignore[union-attr]
+    texts = [get(k, f) or "" for k, f in fields]
+    r = await guard.check_output(_SEP.join(texts), minor_mode=req_minor, rating=rating, use_llm=use_llm)
+    if r.blocked:
+        return True
+    parts = (r.filtered_text or "").split(_SEP) if r.filtered_text is not None else texts
+    if len(parts) != len(texts):  # 分隔符被改动 → 逐字段兜底
+        parts = []
+        for t in texts:
+            rr = await guard.check_output(t, minor_mode=req_minor, rating=rating, use_llm=use_llm) if t else None
+            parts.append(t if rr is None else (rr.filtered_text if rr.filtered_text is not None else t))
+    for (kind, key), val in zip(fields, parts):
+        if kind == "w":
+            setattr(world, key, val)
+        else:
+            world.char(key).persona = val  # type: ignore[union-attr]
+    return False
 
 
 async def generate_world_events(req: GenerateWorldRequest, world_id: str | None = None,
@@ -233,12 +257,22 @@ async def generate_world_events(req: GenerateWorldRequest, world_id: str | None 
     """
     from app.graph.turn_graph import world_lock
 
+    orig_req = req
+    if req.refine:  # regenerate 的修改意见：叠加在原始 prompt 之上
+        req = req.model_copy(update={"prompt": f"{req.prompt}\n补充要求：{req.refine}".strip()})
     yield _prog("safety", "正在进行内容安全检查…", 5)
     text_in = "\n".join(x for x in [req.prompt, req.source_text or ""] if x)
-    verdict = await guard.check_input(text_in, minor_mode=req.minor_mode, rating=req.rating,
-                                      context="source_text" if req.mode == "education" else "world_prompt")
-    if verdict.blocked:
-        yield "safety", verdict.model_dump()
+    # 输入审核与骨架生成并行（省掉审核的 1~2s）；骨架在审核通过前不会推送/落库，被拦截则直接丢弃
+    in_task = asyncio.create_task(guard.check_input(
+        text_in, minor_mode=req.minor_mode, rating=req.rating,
+        context="source_text" if req.mode == "education" else "world_prompt"))
+
+    async def input_blocked() -> dict[str, Any] | None:
+        v = await in_task
+        return v.model_dump() if v.blocked else None
+
+    if not llm_enabled() and (bv := await input_blocked()):
+        yield "safety", bv
         yield "done", {"blocked": True, "world_id": None}
         return
 
@@ -251,8 +285,17 @@ async def generate_world_events(req: GenerateWorldRequest, world_id: str | None 
         holder: dict[str, Any] = {}
         msgs = prompts.skeleton_messages(req.prompt, req.genre, req.tone, req.length, req.minor_mode,
                                          req.source_text if req.mode == "education" else None)
-        async for ev in _stream_skeleton(msgs, holder):
-            yield ev
+        try:
+            async for ev in _stream_skeleton(msgs, holder):
+                if in_task.done() and in_task.result().blocked:
+                    break
+                yield ev
+        finally:
+            bv = await input_blocked()
+        if bv:
+            yield "safety", bv
+            yield "done", {"blocked": True, "world_id": None}
+            return
         skeleton = holder.get("data")
         if skeleton and skeleton.get("locations") and skeleton.get("characters"):
             data, source = skeleton_to_data(skeleton, req, edu), "llm"
@@ -272,16 +315,17 @@ async def generate_world_events(req: GenerateWorldRequest, world_id: str | None 
         world.knowledge_cards = [KnowledgeCard(**k) for k in fb["knowledge_cards"]]
     yield _prog("conflict", "埋下初始冲突与伏笔", 75)
 
-    out = await guard.check_output(json.dumps(world.model_dump(include={"title", "setting", "initial_conflict", "opening_scene"}),
-                                              ensure_ascii=False), minor_mode=req.minor_mode, rating=req.rating)
-    if out.blocked:
+    # 骨架阶段只做关键词/规则层审核（保证秒级预览）；含大模型的完整审核在第二步补全时进行
+    if await _filter_world_text(world, req.minor_mode, req.rating, use_llm=False if skeleton else None):
         log.warning("world output blocked, using fallback template")
-        yield "safety", out.model_dump()
+        yield "safety", {"allowed": False, "blocked": True, "crisis": False, "categories": ["output"], "rating": req.rating,
+                         "message": "生成内容未通过安全审核，已替换为安全模板。"}
         world = normalize_world(fallback.build_world_dict("", None, None, req.length), world_id=world_id, req=req, source="fallback")
         source, skeleton = "fallback", None
-    await _filter_world_text(world, req.minor_mode, req.rating)
+        await _filter_world_text(world, req.minor_mode, req.rating)
     token = uuid.uuid4().hex[:10]
-    world.state.flags["gen_request"] = req.model_dump(exclude={"wait_details"})
+    world.gen_request = orig_req.model_dump(exclude={"wait_details"})
+    world.state.flags["gen_request"] = world.gen_request  # 兼容旧前端读取 state.flags.gen_request
     world.state.flags["gen_token"] = token
     if edu:
         world.state.flags["edu"] = edu
@@ -297,13 +341,22 @@ async def generate_world_events(req: GenerateWorldRequest, world_id: str | None 
         for c in world.npcs():  # 轨迹起点（上帝视角）
             repo.add_trajectory(world.id, c.id, 0, c.location_id, f"登场：{c.role}", c.mood)
     yield "world", world.model_dump(mode="json")
-    yield _prog("memory", "构建世界记忆库", 95)
-    await initial_memories(world)
     task = None
-    if skeleton:
-        task = asyncio.create_task(enrich_world(world_id, token, skeleton, req))
+    if skeleton:  # 记忆索引（远程向量）与细节补全都放后台，done 立即返回
+        yield _prog("memory", "世界记忆库在后台构建", 95)
+
+        async def background() -> World | None:
+            try:
+                await initial_memories(world)
+            except Exception:  # noqa: BLE001
+                log.exception("initial memories failed")
+            return await enrich_world(world_id, token, skeleton, req)
+        task = asyncio.create_task(background())
         _bg.add(task)
         task.add_done_callback(_bg.discard)
+    else:
+        yield _prog("memory", "构建世界记忆库", 95)
+        await initial_memories(world)
     if task is not None and req.wait_details:
         yield _prog("details", "精雕细琢：补全人物性格、关系与开场…", 97)
         try:
@@ -427,35 +480,63 @@ async def enrich_world(world_id: str, token: str, skeleton: dict[str, Any], req:
           "characters": [{"id": c.id, "name": c.name, "role": c.role, "location_id": c.location_id} for c in w0.npcs()],
           "setting": w0.setting, "initial_conflict": w0.initial_conflict}
     meta: dict[str, Any] = {}
-    try:
-        d = await chat_json(prompts.enrich_messages(sk, req.prompt or (req.source_text or "")[:200], req.minor_mode,
-                                                    req.mode == "education"),
-                            model=get_settings().chat_model, temperature=0.8 if req.mode == "story" else 0.4,
-                            max_tokens=3500, meta=meta)
-    except Exception:  # noqa: BLE001
-        log.exception("enrich call crashed")
-        d = None
+    msgs = prompts.enrich_messages(sk, req.prompt or (req.source_text or "")[:200], req.minor_mode, req.mode == "education")
+    d = None
+    for attempt in range(2):  # 流式收集，断流时从断点续写；JSON 仍不可解析则整段重来一次
+        buf = ""
+        try:
+            async for chunk in chat_stream_resumable(msgs, attempts=6, model=get_settings().chat_model,
+                                                     temperature=0.8 if req.mode == "story" else 0.4,
+                                                     max_tokens=3500, meta=meta):
+                buf += chunk
+        except LLMUnavailable as e:
+            log.warning("enrich attempt %d failed: %s", attempt + 1, e)
+            if not buf:
+                break
+            continue
+        except Exception:  # noqa: BLE001
+            log.exception("enrich call crashed")
+            break
+        d = parse_json(buf)
+        if d:
+            meta["attempts"] = attempt + 1
+            break
+    opening_changed = False
     async with world_lock(world_id):
         w = repo.load_world(world_id)
         if not w or w.state.flags.get("gen_token") != token:
             return None  # 世界已删除或已被重新生成
+        opening_before = w.opening_scene
         if d and (d.get("characters") or d.get("locations")):
             snapshot = w.model_copy(deep=True)
             try:
                 _merge(w, d)
-                await _filter_world_text(w, w.minor_mode, w.rating)
-                w.detail_status = "complete"
+                if await _filter_world_text(w, w.minor_mode, w.rating):  # 补全内容被硬拦截 → 保留骨架
+                    w = snapshot
+                    w.detail_status = "local"
+                    await _filter_world_text(w, w.minor_mode, w.rating)
+                else:
+                    w.detail_status = "complete"
             except Exception:  # noqa: BLE001
                 log.exception("merge failed, keeping skeleton")
                 w = snapshot
                 w.detail_status = "local"
         else:
             w.detail_status = "local"
+            if await _filter_world_text(w, w.minor_mode, w.rating):  # 骨架补做完整审核（含大模型）
+                fb = normalize_world(fallback.build_world_dict("", None, None, req.length), world_id=w.id, req=req,
+                                     source="fallback")
+                fb.state.flags, fb.status = w.state.flags, w.status
+                w = fb
         w.state.flags["detail"] = {"model": meta.get("model"), "secs": round(time.monotonic() - t0, 1),
                                    "status": w.detail_status}
         repo.save_world(w)
+        opening_changed = w.opening_scene != opening_before and w.status == "active" and w.state.turn == 0
         if w.detail_status == "complete":
             await _refresh_setting_memories(w)
+    if opening_changed:  # 已确认的世界开场被补全改写 → 重新生成开场插画/配音
+        from app.graph.turn_graph import spawn_opening_media
+        spawn_opening_media(w)
     log.info("world %s details %s in %.1fs (model=%s)", world_id, w.detail_status, time.monotonic() - t0, meta.get("model"))
     return w
 
@@ -469,3 +550,37 @@ async def _refresh_setting_memories(world: World) -> None:
         await store.add_memories(world.id, [{"content": f"{c.name}是{c.role}，{c.persona}；目标：{'、'.join(c.goals)}",
                                              "kind": "setting", "turn": 0, "chapter": 1, "refs": {"character_id": c.id}}
                                             for c in world.npcs()])
+
+
+def resume_stale_enrichment() -> int:
+    """服务启动时：上次进程退出前仍在 ``enriching`` 的世界（后台任务随进程丢失）→ 重新排队补全；无可用模型则标记 local。"""
+    n = 0
+    for summ in repo.list_worlds():
+        w = repo.load_world(summ.id)
+        if not w or w.detail_status != "enriching":
+            continue
+        n += 1
+        token = w.state.flags.get("gen_token") or ""
+        try:
+            req = GenerateWorldRequest(**{k: v for k, v in (w.gen_request or {}).items()
+                                          if k in GenerateWorldRequest.model_fields})
+        except Exception:  # noqa: BLE001
+            req = GenerateWorldRequest(prompt=w.premise, mode=w.mode, rating=w.rating, minor_mode=w.minor_mode)
+        if not llm_enabled() or not token:
+            w.detail_status = "local"
+            repo.save_world(w)
+            continue
+
+        async def job(world: World = w, tok: str = token, r: GenerateWorldRequest = req) -> None:
+            try:
+                if not store.list_memories(world.id, limit=1):
+                    await initial_memories(world)
+                await enrich_world(world.id, tok, {}, r)
+            except Exception:  # noqa: BLE001
+                log.exception("resume enrichment failed")
+        task = asyncio.create_task(job())
+        _bg.add(task)
+        task.add_done_callback(_bg.discard)
+    if n:
+        log.info("resumed %d stale enriching world(s)", n)
+    return n

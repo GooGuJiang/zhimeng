@@ -107,6 +107,8 @@ class World(BaseModel):
     source: Literal["llm", "fallback"] = "fallback"
     # 两步生成：enriching=骨架已可玩、后台补全细节中；complete=细节完整；local=补全失败，已按本地规则补齐（仍可玩）
     detail_status: Literal["enriching", "complete", "local"] = "complete"
+    # 生成该世界的原始请求（GenerateWorldRequest 字段，不含 wait_details；含最近一次 regenerate 的 refine）
+    gen_request: dict[str, Any] | None = None
     ai_generated: bool = True
     ai_label: str = AI_LABEL
 
@@ -143,6 +145,8 @@ class GenerateWorldRequest(BaseModel):
     minor_mode: bool = False
     rating: Rating = "teen"
     wait_details: bool = False  # true：SSE 保持打开，补全完成后再推送一次完整 world 再 done
+    # 仅 regenerate 使用：在原始请求的 prompt 之上追加的修改意见（"" 表示清除上次的 refine）
+    refine: str | None = Field(None, max_length=1000)
 
 
 class EducationGenerateRequest(BaseModel):

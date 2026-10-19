@@ -45,7 +45,12 @@ def save_world(world: World) -> World:
 def load_world(world_id: str) -> World | None:
     with session_scope() as s:
         row = s.get(WorldRow, world_id)
-        return World.model_validate(row.data) if row else None
+        if not row:
+            return None
+        w = World.model_validate(row.data)
+        if w.gen_request is None and w.state.flags.get("gen_request"):  # 旧存档：从 flags 回填正式字段
+            w.gen_request = w.state.flags["gen_request"]
+        return w
 
 
 def list_worlds() -> list[WorldSummary]:
