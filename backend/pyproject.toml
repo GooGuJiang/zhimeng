@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zhimeng-backend"
+version = "1.0.0"
+description = "《织梦》AI 原生互动叙事引擎 — 后端（FastAPI + LangGraph + SQLite + ChromaDB，模型：阿里云百炼 DashScope）"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "sqlmodel>=0.0.21",
+  "langgraph>=0.2",
+  "chromadb>=0.5",
+  "openai>=1.40",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
