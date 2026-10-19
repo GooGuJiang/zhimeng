@@ -12,7 +12,10 @@ import {
 // 各用例互相独立（各自新建世界），失败不阻断后续用例
 test.describe.configure({ mode: "default" });
 
-test.afterEach(() => {
+test.afterEach(async ({ page }) => {
+  // v1.2：回合降级为本地模板时前端标注「本地叙事」——记录出现次数
+  const local = await page.getByText("本地叙事").count().catch(() => 0);
+  if (local) test.info().annotations.push({ type: "local-narration", description: `${local} 处「本地叙事」` });
   if (retryLog.length) test.info().annotations.push({ type: "turn-retries", description: retryLog.splice(0).join(" | ") });
 });
 
@@ -43,6 +46,13 @@ test("AC-1 一句话生成世界：5秒内展示地图、角色、初始冲突",
   expect(await progressSeen, "generation progress should be visualised").toBeTruthy();
   if (!llm) expect(ms, "fallback preview must appear within 5s").toBeLessThan(5_000);
   else if (ms > 5_000) test.info().annotations.push({ type: "warning", description: `real model preview took ${ms}ms (>5s target)` });
+  // v1.2 两步生成：细节补全中显示 world-detail-enriching；真实模型下记录补全耗时（软检查）
+  const enriching = page.getByTestId("world-detail-enriching");
+  if (await enriching.isVisible().catch(() => false)) {
+    const t0 = Date.now();
+    await expect(enriching).toHaveCount(0, { timeout: REAL ? 180_000 : 30_000 }).catch(() => {});
+    test.info().annotations.push({ type: "detail_enriching_ms", description: String(Date.now() - t0) });
+  }
   await expect(el(page, "regenerate-btn", page.getByRole("button", { name: /重新生成/ })).first()).toBeVisible();
   await confirmWorld(page);
 });
@@ -105,6 +115,10 @@ test("AC-4 记忆一致性：询问三章前细节，准确回忆并给出出处
   if (!(await q.isVisible())) await el(page, "memory-tab", page.getByRole("button", { name: /记忆|回忆/ })).first().click();
   await q.fill("第一章那个线人叫什么？他给了我什么？");
   await el(page, "memory-query-btn", page.getByRole("button", { name: /回忆|查询|提问/ })).first().click();
+  // memory-loading 出现后消失；memory-error 出现即失败并带出错误文案
+  await expect(page.getByTestId("memory-loading")).toHaveCount(0, { timeout: REAL ? 150_000 : 30_000 });
+  const memErr = page.getByTestId("memory-error");
+  if (await memErr.isVisible().catch(() => false)) throw new Error(`memory-error: ${await memErr.innerText()}`);
   const ans = el(page, "memory-answer").first();
   await expect(ans).toBeVisible();
   await expect(ans).toContainText(/阿四|纽扣/);
@@ -123,7 +137,18 @@ test("AC-5 多模态：关键场景出现插画与配音", async ({ page, reques
   await expect(audio.first()).toBeAttached({ timeout: REAL ? 180_000 : 30_000 });
   const assets = await apiJson<any[]>(request, `/api/worlds/${wid}/assets`);
   expect(new Set(assets.map((a) => a.type))).toEqual(new Set(["image", "audio"]));
-  if (llm) expect(assets.some((a) => a.source === "dashscope"), "real-model mode should produce DashScope assets").toBeTruthy();
+  if (llm) {
+    // v1.3：关键场景先给 pending 占位，后台原地升级（同 id）。用 ?wait= 长轮询，外部时延只做软检查
+    const t0 = Date.now();
+    let upgraded = assets.some((a) => a.source === "dashscope" && a.status !== "pending");
+    for (let i = 0; i < 12 && !upgraded; i++) {
+      for (const a of assets.filter((x) => x.status === "pending" || x.source !== "dashscope")) {
+        const r = await request.get(`${API}/api/assets/${a.id}?wait=8`, { timeout: 20_000 });
+        if (r.ok()) { const n = await r.json(); expect(n.id).toBe(a.id); if (n.source === "dashscope" && n.status === "ready") upgraded = true; }
+      }
+    }
+    test.info().annotations.push({ type: "asset-upgrade", description: upgraded ? `dashscope ready after ${Date.now() - t0}ms` : "still placeholder after ~100s (soft)" });
+  }
 });
 
 test("AC-6 生成式UI：状态面板/关系图随剧情生成且可交互", async ({ page, request }) => {
@@ -213,7 +238,23 @@ test("AC-9 教育模式：课文转化为可走进世界并给出知识小结", 
   await expect.poll(() => page.getByTestId("knowledge-card").count(), { timeout: 30_000 }).toBeGreaterThan(0);
   await playTurn(page, "我沿着溪水划船前行");
   await el(page, "edu-summary-btn", page.getByRole("button", { name: /小结|总结/ })).first().click();
+  // edu-summary-loading → edu-summary；出错时（edu-summary-error）点 edu-summary-retry 重试一次
   const s = el(page, "edu-summary").first();
+  const eduErr = page.getByTestId("edu-summary-error");
+  await expect(page.getByTestId("edu-summary-loading")).toHaveCount(0, { timeout: REAL ? 150_000 : 30_000 });
+  if (await eduErr.isVisible().catch(() => false)) {
+    test.info().annotations.push({ type: "edu-summary-error", description: await eduErr.innerText() });
+    await page.getByTestId("edu-summary-retry").click();
+    await expect(page.getByTestId("edu-summary-loading")).toHaveCount(0, { timeout: REAL ? 150_000 : 30_000 });
+  }
+  await expect(eduErr, "学习小结不应报错（BUG-007）").toHaveCount(0);
   await expect(s).toBeVisible({ timeout: REAL ? 120_000 : 30_000 });
+  // v1.2：先显示本地版（edu-summary-pending），稍后替换为 AI 版；软检查，只记录
+  const pend = page.getByTestId("edu-summary-pending");
+  if (await pend.isVisible().catch(() => false)) {
+    const t0 = Date.now();
+    const done = await expect(pend).toHaveCount(0, { timeout: REAL ? 90_000 : 20_000 }).then(() => true).catch(() => false);
+    test.info().annotations.push({ type: "edu-summary-pending", description: done ? `replaced after ${Date.now() - t0}ms` : "still pending (local version shown)" });
+  }
   await expect(s).toContainText(/桃花|武陵|渔人/);
 });

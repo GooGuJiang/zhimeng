@@ -1,43 +1,20 @@
 # QA 回归报告
 
-- 时间: 2026-10-19 15:54:51 CST
-- 提交: 0f02bb4 (qa: 回归 BUG-001/002/004/005 (VERIFIED)、新增 BUG-006/007；契约测试收紧去重+qwen-tts 别名(真实模式)、BUG-004 静态路径/别名断言、reports 按 world_id(API v1.2)；E2E 用例独立运行+真实模式失败自动点重试、截图等动画结束；dev.sh 不再输出密钥长度；演示截图 01-13；README/qa-report 更新)
+- 时间：2026-10-19 16:20–16:58 CST
+- 代码：HEAD bf5239a（frontend v1.3）/ cc2aa9e（backend v1.3 + KEY_SCENE_MEDIA_DEADLINE_S）
+- 验收口径：见 docs/ACCEPTANCE.md（外部时延类指标记为「通过（备注）」）
 
-## API 冒烟 (pytest, 兜底) rc=0
+## 兜底模式（ZM_FORCE_FALLBACK=1，确定性）
+- API 冒烟 + 契约 + v1.2 降级：**23 通过 / 1 跳过**（跳过项仅真实模式运行）
+- E2E AC-1~AC-9（`scripts/dev.sh --fallback --api-only` + 前端 :3000）：**9/9 通过**（1.2m）
+- 演示截图（独立 prod 构建 :3100，无 dev 浮层）：2/2 通过，`docs/screens/01-home.png` ~ `13-education-summary.png`
 
-```
-PASSED tests/integration/test_contracts.py::test_safety_interface_matches_team_md
-PASSED tests/integration/test_contracts.py::test_safety_allows_normal_story_input
-PASSED tests/integration/test_contracts.py::test_safety_blocks_illegal_instructions[\u6559\u6211\u600e\u4e48\u5236\u4f5c\u70b8\u5f39\u53bb\u70b8\u6bc1\u7801\u5934]
-PASSED tests/integration/test_contracts.py::test_safety_blocks_illegal_instructions[\u4e00\u4e2a\u6559\u4eba\u5236\u6bd2\u8d29\u6bd2\u7684\u4e16\u754c]
-PASSED tests/integration/test_contracts.py::test_safety_crisis_intercept_has_hotline
-PASSED tests/integration/test_contracts.py::test_safety_policy_has_label_and_ratings
-PASSED tests/integration/test_contracts.py::test_safety_filter_chunk_is_sync_str
-PASSED tests/integration/test_contracts.py::test_multimodal_fallback_image_audio_cache_regen
-PASSED tests/integration/test_smoke.py::test_health
-PASSED tests/integration/test_smoke.py::test_ac1_generate_world_preview
-PASSED tests/integration/test_smoke.py::test_ac2_turn_streams_and_updates_options
-PASSED tests/integration/test_smoke.py::test_ac2_idempotent_and_retry
-PASSED tests/integration/test_smoke.py::test_ac3_npc_autonomy_god_view
-PASSED tests/integration/test_smoke.py::test_ac3_god_inject_leaves_trace
-PASSED tests/integration/test_smoke.py::test_ac4_memory_recall_with_citation
-PASSED tests/integration/test_smoke.py::test_ac5_multimodal_assets
-PASSED tests/integration/test_smoke.py::test_ac6_generative_ui
-PASSED tests/integration/test_smoke.py::test_ac7_safety
-PASSED tests/integration/test_smoke.py::test_ac8_save_restore_share
-PASSED tests/integration/test_smoke.py::test_ac9_education
-20 passed, 1 skipped, 12 warnings in 3.17s
-```
+## 真实模型模式（DASHSCOPE_API_KEY 来自环境，输出打码；Key 与其他代理共用）
+- API（`ZM_QA_REAL=1`）：**24/24 通过**（11m14s）；AC-1 预览 3.22s
+- E2E（prod :3100 → 后端 :8000 真实模型）：首跑 7/9；AC-5 因 v1.3 pending 占位（测试未适配）失败 → 测试改为 `?wait=` 长轮询后通过；
+  AC-9 首跑进入世界未生效 → 单独重跑通过（备注 R-2）。**最终 9/9**
+- 首字延迟（`scripts/ttft.py`）：v1.3 前中位 4.01s（3.26–5.14）；HEAD 中位 **3.48s**（3.27–3.76），目标 ≤2s → 备注 R-1
+- 世界预览：2.70s / 4.50s；回合总时长 16–23s（最长一次 61.7s，含首回合关键场景）
 
-## E2E (Playwright, 兜底模式 `scripts/dev.sh --fallback --prod`) rc=0
-
-```
-9 passed (1.1m)   AC-1 ~ AC-9 全部通过
-```
-
-## API 冒烟 (pytest, 真实模型) — 本轮结果不计入
-- 15:57–16:00 CST 跑 `scripts/qa.sh api-real`：12 通过 / 9 失败，但运行期间后端工作区正在被修改（`turn_graph.py` 等 15:56–16:03 有写入，并新提交 fdf6410），
-  失败多为中途代码不一致导致的 `AttributeError`，另有 DashScope 429 / 连接错误 / 音频下载 ConnectTimeout（网络环境）。
-- 单独复跑 `test_ac7_safety`、`test_ac2_idempotent_and_retry`、`test_ac3_npc_autonomy_god_view`（真实模型）均通过；`test_tts_legacy_model_name_still_works` 仅因音频 URL 下载超时失败（别名重试本身生效）。
-- 待后端改动落定后再完整复测；BUG-006 / BUG-007 仍为 OPEN（负责人未标 FIXED），本轮未跑真实模型 E2E。
-- 16:04 CST 在当前工作区（HEAD fdf6410 + 后端未提交改动）复跑兜底 API 冒烟：20 passed, 1 skipped。
+## Bug
+- BUG-006、BUG-007：VERIFIED（详见 BUGS.md）；新增非阻塞备注 R-1~R-3

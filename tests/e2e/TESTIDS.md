@@ -16,6 +16,8 @@ but test ids make the suite stable. Page routes are discovered by clicking, not 
 | Preview | `initial-conflict` | 「冲突」 | |
 | Preview | `confirm-world-btn` | button 「进入世界」/「确认」 | |
 | Preview | `regenerate-btn` | 「重新生成」 | |
+| Preview | `world-detail-enriching` | — | v1.2 两步生成：细节补全中 |
+| Preview | `refine-current` | — | 重新生成时的调整要求 |
 | Play | `narration` | — | the narration log; latest turn `narration-latest` |
 | Play | `option-btn` | — | every current option button |
 | Play | `free-input` | textarea placeholder containing 行动/输入 | |
@@ -30,6 +32,7 @@ but test ids make the suite stable. Page routes are discovered by clicking, not 
 | Play | `report-btn` | 「举报」 | opens report dialog; submit `report-submit` |
 | Play | `safety-notice` | — | blocked/crisis message |
 | Memory | `memory-query-input` / `memory-query-btn` / `memory-answer` / `citation` | 「回忆」/「记忆」 | F4 query |
+| Memory | `memory-loading` / `memory-error` | — | 提问进行中 / 失败提示（中文） |
 | God | `god-view-btn` | 「上帝视角」 | |
 | God | `npc-card` | — | one per NPC, contains `npc-trajectory` |
 | God | `inject-input` / `inject-btn` | 「插入事件」 | |
@@ -40,3 +43,5 @@ but test ids make the suite stable. Page routes are discovered by clicking, not 
 | Edu | `edu-source-input` / `edu-generate-btn` | 「课文」/「生成」 | |
 | Edu | `knowledge-card` | 「知识卡」 | |
 | Edu | `edu-summary-btn` / `edu-summary` | 「学习小结」/「小结」 | |
+| Edu | `edu-summary-pending` | — | v1.2 先显示的本地小结，随后替换为 AI 版 |
+| Edu | `edu-summary-loading` / `edu-summary-error` / `edu-summary-retry` | 「重试」 | 小结加载中 / 失败 / 重试（BUG-007） |

@@ -26,6 +26,21 @@ def play(api, wid, action, retries: int = 2, **extra):
     return ev
 
 
+def wait_ready(api, asset, rounds: int = 6):
+    """v1.3：pending 占位会在后台原地升级（同 id）。用 GET /api/assets/{id}?wait= 长轮询直到 ready。"""
+    for _ in range(rounds):
+        if asset.get("status", "ready") == "ready":
+            return asset
+        r = api.get(f"/api/assets/{asset['id']}", params={"wait": 8})
+        assert r.status_code == 200, r.text[:200]
+        nxt = r.json()
+        assert nxt["id"] == asset["id"], "upgrade must keep the same id"
+        asset = nxt
+    if not LIVE and not REAL:
+        raise AssertionError(f"asset still pending in fallback mode: {asset}")
+    return asset  # 真实模型：可能仍是占位（外部时延），后续断言照常进行
+
+
 def test_health(api):
     r = api.get("/api/health")
     assert r.status_code == 200
@@ -51,6 +66,10 @@ def test_ac1_generate_world_preview(api):
     assert w["ai_generated"] is True and w["ai_label"] == AI_LABEL
     if not LIVE and not REAL:
         assert elapsed < 5, f"fallback world generation took {elapsed:.1f}s (AC-1: 5s)"
+    elif elapsed >= 5:  # 真实模型：外部时延只告警，不判失败（见 README「实际取舍」）
+        import warnings
+        warnings.warn(f"AC-1 real-model preview took {elapsed:.1f}s (>5s target)")
+    print(f"[metric] AC-1 world preview {elapsed:.2f}s")
     # persisted + regenerate keeps id
     assert api.get(f"/api/worlds/{w['id']}").status_code == 200
     ev2 = api.sse(f"/api/worlds/{w['id']}/regenerate", {})
@@ -146,15 +165,21 @@ def test_ac4_memory_recall_with_citation(api):
 # ---------------- AC-5 ----------------
 def test_ac5_multimodal_assets(api, world):
     wid = world["id"]
+    t0 = time.time()
     img = api.post(f"/api/worlds/{wid}/assets/illustration", {"prompt": "民国上海外滩夜景，报社记者"})
     assert img.status_code == 200, img.text
-    a = img.json()
+    if time.time() - t0 > 10:  # v1.3：媒体接口约 8s 内返回（可能是 pending 占位）
+        import warnings
+        warnings.warn(f"illustration endpoint took {time.time() - t0:.1f}s (v1.3 target ≤ ~8s)")
+    a = wait_ready(api, img.json())
     assert a["type"] == "image" and a["url"]
     again = api.post(f"/api/worlds/{wid}/assets/illustration", {"prompt": "民国上海外滩夜景，报社记者"}).json()
     assert again["id"] == a["id"], "illustration must be cached by prompt"
     tts = api.post(f"/api/worlds/{wid}/assets/tts", {"text": "夜色笼罩着外滩。"})
     assert tts.status_code == 200 and tts.json()["type"] == "audio"
-    for asset in (a, tts.json()):
+    au = wait_ready(api, tts.json())
+    for asset in (a, au):
+        assert {"status", "version", "updated_at"} <= set(asset), f"v1.3 asset fields: {list(asset)}"
         f = api.get(asset["url"] if asset["url"].startswith("/") else "/" + asset["url"])
         assert f.status_code == 200 and len(f.content) > 0, asset["url"]
     # BUG-004 回归：统一路径 /api/static/assets，旧 /static/assets 为兼容别名

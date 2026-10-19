@@ -153,8 +153,15 @@ pnpm dev            # http://localhost:3000
 | `CHAT_MODEL` / `FAST_MODEL` | `qwen-plus` / `qwen-turbo` | 叙事模型 / 快速决策与审核模型 |
 | `EMBEDDING_MODEL` | `text-embedding-v3` | 记忆向量模型 |
 | `IMAGE_MODEL` / `TTS_MODEL` | `wanx2.1-t2i-turbo` / `qwen3-tts-flash` | 插画 / 配音模型（旧名 `qwen-tts` 会自动映射，见 BUGS.md BUG-002） |
+| `SYNC_LLM_TIMEOUT_S` | `8.0` | 非流式 LLM 调用（学习小结、记忆问答、抽取、测验）总时限，超时用本地兜底（BUG-007） |
+| `GUARD_TIMEOUT_S` | `6.0` | 安全审核单次 LLM 调用时限，超时退回关键词/规则层 |
+| `AGENT_BUDGET_S` | `2.0` | 回合中叙事前世界/角色 Agent 的时间预算，超时用本地规则，保证首字延迟 |
+| `RETRIEVAL_BUDGET_S` | `1.2` | 记忆向量检索时间预算，超时跳过检索 |
+| `KEY_SCENE_MEDIA_DEADLINE_S` | `3` | 关键场景插画/配音在回合流中的最长等待（秒）；超时先返回 `pending` 占位，后台原地升级（同 id，`GET /api/assets/{id}?wait=` 可长轮询） |
+| `ZM_ADMIN_TOKEN` | 空 | 管理员令牌：`GET /api/reports` 不带 `world_id` 查看全量举报需请求头 `X-Admin-Token` 一致；为空则禁用全量列表 |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
+| `ZM_PROXY_TIMEOUT_MS` | `180000` | Next 反向代理超时（毫秒）；Next 16 默认 30s 会让长请求 socket hang up（BUG-007）；修改后需重新 build / 启动前端 |
 | `NEXT_PUBLIC_API_BASE` | 空 | 可选：让浏览器直连后端（默认同源代理） |
 
 ## 测试
@@ -164,6 +171,7 @@ scripts/qa.sh            # API 冒烟 + E2E，结果写入 docs/qa-report.md
 scripts/qa.sh api        # 只跑 API 冒烟 + 包级契约测试（进程内、兜底模式、临时数据目录，无需启动服务）
 scripts/qa.sh api-real   # 同上但走真实模型（DASHSCOPE_API_KEY 取自环境或 .env；输出中的密钥自动打码）
 scripts/qa.sh e2e        # 只跑 E2E（需应用已运行）
+backend/.venv/bin/python scripts/ttft.py --turns 5   # 对运行中的服务测首字延迟 / 世界预览耗时（只输出数字）
 
 # E2E（需先 scripts/dev.sh 启动应用；使用系统 Chrome）
 cd tests/e2e && pnpm install
@@ -202,6 +210,20 @@ ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tes
 | 教育模式 | `11-education-input.png` · `12-education-play.png` · `13-education-summary.png` |
 
 （均位于 `docs/screens/`，由 `pnpm demo` 生成；应用尚未可运行时该目录为空，见 BUGS.md。）
+
+## 实际取舍
+
+plan.md 中部分指标受外部条件（阿里云百炼 / DashScope 的推理时延、限流配额、网络）约束，团队无法单方面保证。我们的做法是：**功能可用、降级合理、体验可接受即视为通过**，并如实记录实测数字与差距（见 `docs/ACCEPTANCE.md`、`docs/qa-report.md`）。
+
+| plan.md 要求 | 问题 | 实际取舍 |
+|---|---|---|
+| AC-1「5 秒内展示世界设定预览」 | 完整世界（地图+角色+冲突）一次性由大模型生成通常需要数十秒 | 两步生成：快速模型先出骨架预览（目标 ≤5s），大模型后台补全细节并合并（`detail_status`）；兜底模式恒 <1s。真实模型超 5s 只告警不判失败 |
+| 流式首字延迟 ≤2s | 回合需先做输入安全审核（LLM）再叙事，实测首字 3.0–4.1s，瓶颈在审核调用 | 审核与检索/Agent 设时间预算并行（`GUARD_TIMEOUT_S`、`AGENT_BUDGET_S`、`RETRIEVAL_BUDGET_S`），超时退回规则层；首字延迟记为备注，持续优化，不作为阻塞问题 |
+| 「模型 API 可用」为前置条件 | 同一 Key 多人并发时频繁 429、偶发断流 | 备用模型链自动切换 + 断流续写；全链失败时用本地模板完成回合（`source="fallback"`），用户侧不出现失败 |
+| 单次生成失败自动重试 ≥1 次且不丢进度 | — | 服务端重试/切换模型；`client_turn_id` 幂等；失败不提交，可「重试」 |
+| 学习小结 / 记忆问答等非流式调用 | 大模型耗时可能 >30s，超过代理默认超时 | 非流式调用 8s 总时限（`SYNC_LLM_TIMEOUT_S`），小结先返回本地版 `status:"pending"`，后台生成完整版；前端代理超时提高到 180s（`ZM_PROXY_TIMEOUT_MS`） |
+| AC-10 公网可用、评审账号 | 部署环境不在本轮范围 | 本轮跳过；本地 `scripts/dev.sh --prod` 可完整演示 |
+| 测试的时间断言 | 真实模型时延波动 | 兜底模式（确定性）严格断言；真实模型模式下时延只告警 / 记入注解，429、网络错误先单独重跑一次再判定 |
 
 ## 团队分工
 

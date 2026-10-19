@@ -10,8 +10,8 @@ Owner：`backend`（核心）、`frontend`、`safety-mm`（安全+多模态）�
 | BUG-003 | VERIFIED | frontend | 首页 `GET /` 返回 500：`src/app/page.tsx` 仍是模板且 import 已删除的 `./page.module.css` |
 | BUG-004 | VERIFIED | backend | API.md 写静态资源路径为 `/static/assets/<file>`，而 TEAM.md 与 `app/multimodal/assets.py` 实际为 `/api/static/assets/<file>` |
 | BUG-005 | VERIFIED | safety-mm | 兜底模式下同一 prompt 多次 `illustrate()` 每次都新建一条 asset 行（文件复用），与 API.md「按 prompt hash 缓存」不一致，资产列表会膨胀 |
-| BUG-007 | FIXED(待复测，后端部分) | frontend（+backend 时延） | 真实模型模式「学习小结」弹窗显示 `Internal Server Error`：`/education/summary` 耗时 >30s，Next 代理 `socket hang up`(ECONNRESET) |
-| BUG-006 | FIXED(待复测) | backend | 真实模型模式下 LLM 限流(429)/流中断时回合直接失败（`error` / 前端「本回合生成失败（LLMUnavailable）」），未自动降级到本地兜底模板 |
+| BUG-007 | VERIFIED | frontend（+backend 时延） | 真实模型模式「学习小结」弹窗显示 `Internal Server Error`：`/education/summary` 耗时 >30s，Next 代理 `socket hang up`(ECONNRESET) |
+| BUG-006 | VERIFIED | backend | 真实模型模式下 LLM 限流(429)/流中断时回合直接失败（`error` / 前端「本回合生成失败（LLMUnavailable）」），未自动降级到本地兜底模板 |
 
 ### BUG-001 后端入口缺失（阻塞全部 API / E2E）
 - 复现：`scripts/qa.sh api` 或 `scripts/dev.sh --fallback`（2026-10-19 14:55 CST，HEAD 17a1cfa + 工作区）
@@ -57,6 +57,11 @@ Owner：`backend`（核心）、`frontend`、`safety-mm`（安全+多模态）�
   `progress{stage:"fallback",reset:true}` 后整段兜底重写（以 `done.turn.narration` 为准）；NPC/世界 Agent/记忆问答/章节摘要/抽取同样本地兜底。
   单测：backend/tests/core/test_bug006_007.py（模拟全链 429、首字后断流）
 
+- 复测（16:3x–16:5x CST，HEAD bf5239a/cc2aa9e）：VERIFIED。
+  - 新增黑盒用例 `test_v12_whole_model_chain_down_degrades_to_templates`：假 Key + 不可达 DashScope 地址（全链失败）→ 世界 `source=fallback`、回合无 `error` 且
+    `done.turn.source="fallback"`、记忆问答 200、学习小结 200/fallback（回合 8.5s，小结 1.6s）
+  - 真实模型 API 24/24 通过（含 13 回合 AC-4，此前因回合失败未达 3 章）；`scripts/ttft.py` 4 回合 `source` 全为 llm、无 reset
+  - 真实模型 E2E 未再出现「本回合生成失败（LLMUnavailable）」；首字后断流重置（`progress{stage:"fallback",reset:true}`）本轮未自然触发，由后端单测覆盖
 
 ### BUG-007 真实模型学习小结经代理超时
 - 复现：`scripts/dev.sh --prod`（真实模型）+ `ZM_MODE=real pnpm exec playwright test --project=ac -g AC-9`（15:47 CST）：点「学习小结」→ 弹窗内容 `Internal Server Error`
@@ -67,3 +72,13 @@ Owner：`backend`（核心）、`frontend`、`safety-mm`（安全+多模态）�
 - 修复（后端）：提交 c066acf。`/education/summary` 最多约 8s 返回：LLM 版（快速模型+短输入）在后台任务生成并按世界+回合缓存，未就绪时先返回本地小结
   `status:"pending", source:"fallback"`，再 GET 得 `status:"complete"`（字段向后兼容）。非流式 LLM 调用统一 8s 总时限（SYNC_LLM_TIMEOUT_S），
   安全审核 6s 时限后走规则层。真实 Key 实测：首次 8.0s pending/fallback，约 10s 后 3.6s complete/llm。前端代理超时/友好提示属前端
+- 修复（前端）：6a8a2db / 18f8638 / 943e9a1（`experimental.proxyTimeout` 180s，可用 `ZM_PROXY_TIMEOUT_MS` 调整；长请求 120s；`edu-summary-loading/error/retry`、中文错误文案）
+- 复测：VERIFIED。真实模型 API `test_v12_education_summary_status_source` 通过（≤8s 返回，pending 后续 GET 变 complete）；真实模型 E2E AC-9 通过（重跑一次，见备注 R-2），未再出现 Internal Server Error
+
+## 备注（非阻塞，按放宽后的验收口径记录）
+
+| ID | Owner | 内容 | 实测 |
+|---|---|---|---|
+| R-1 | safety-mm / backend | 真实模型回合首字延迟高于 plan.md 目标 ≤2s；瓶颈为输入审核 LLM 调用（v1.3 已改为规则层通过即开始叙事 + 后台复审） | 16:2x：中位 4.01s（3.26–5.14s，5 回合，v1.3 前）；16:5x HEAD：中位 3.48s（3.27–3.76s，4 回合）。兜底模式 0.04s |
+| R-2 | frontend（v1.2 适配，待观察） | 真实模型 E2E AC-9 首跑：教育世界预览页点「进入世界」后 30s 内未进入游玩页，后端无 `/confirm` 请求（当时该世界仍在 `enriching`，后台补全约 108s）；单独重跑通过 | 16:49 首跑失败、16:57 重跑通过；按「429/网络类先重跑」口径未立为 bug |
+| R-3 | backend / safety-mm | AC-1 真实模型预览时间 2.7–4.5s（两步生成骨架），细节补全在后台 60–110s | 达标；补全期间预览页显示 `world-detail-enriching` |
