@@ -1,7 +1,7 @@
 # QA 回归报告
 
-- 时间: 2026-10-19 15:52:31 CST
-- 提交: 239c94d (backend: two-step world generation — qwen-flash skeleton preview (detail_status=enriching) + background qwen-plus enrichment merged by id/name; wait_details option; tests with fake LLM)
+- 时间: 2026-10-19 15:54:51 CST
+- 提交: 0f02bb4 (qa: 回归 BUG-001/002/004/005 (VERIFIED)、新增 BUG-006/007；契约测试收紧去重+qwen-tts 别名(真实模式)、BUG-004 静态路径/别名断言、reports 按 world_id(API v1.2)；E2E 用例独立运行+真实模式失败自动点重试、截图等动画结束；dev.sh 不再输出密钥长度；演示截图 01-13；README/qa-report 更新)
 
 ## API 冒烟 (pytest, 兜底) rc=0
 
@@ -26,30 +26,18 @@ PASSED tests/integration/test_smoke.py::test_ac6_generative_ui
 PASSED tests/integration/test_smoke.py::test_ac7_safety
 PASSED tests/integration/test_smoke.py::test_ac8_save_restore_share
 PASSED tests/integration/test_smoke.py::test_ac9_education
-20 passed, 1 skipped, 12 warnings in 3.29s
+20 passed, 1 skipped, 12 warnings in 3.17s
 ```
 
-## E2E (Playwright) rc=0
+## E2E (Playwright, 兜底模式 `scripts/dev.sh --fallback --prod`) rc=0
 
 ```
-  ✓  1 [ac] › ac.spec.ts:35:5 › AC-1 一句话生成世界：5秒内展示地图、角色、初始冲突 (2.6s)
-  ✓  2 [ac] › ac.spec.ts:50:5 › AC-2 自由输入推进剧情：叙事流式渲染，选项随之更新 (6.3s)
-  ✓  3 [ac] › ac.spec.ts:78:5 › AC-3 NPC自主行动：上帝视角可见各NPC行动与场外事件 (9.0s)
-  ✓  4 [ac] › ac.spec.ts:94:5 › AC-4 记忆一致性：询问三章前细节，准确回忆并给出出处 (13.5s)
-  ✓  5 [ac] › ac.spec.ts:116:5 › AC-5 多模态：关键场景出现插画与配音 (2.5s)
-  ✓  6 [ac] › ac.spec.ts:129:5 › AC-6 生成式UI：状态面板/关系图随剧情生成且可交互 (6.0s)
-  ✓  7 [ac] › ac.spec.ts:150:5 › AC-7 安全过滤：违规输入被拦截，生成内容有分级与AI标识 (4.4s)
-  ✓  8 [ac] › ac.spec.ts:175:5 › AC-8 存档与分享：刷新恢复进度；导出存档/海报/短视频 (12.3s)
-  ✓  9 [ac] › ac.spec.ts:205:5 › AC-9 教育模式：课文转化为可走进世界并给出知识小结 (6.3s)
-  9 passed (1.1m)
+9 passed (1.1m)   AC-1 ~ AC-9 全部通过
 ```
 
-## 真实模型模式（DASHSCOPE_API_KEY 来自环境，输出已打码；同一 Key 有多个代理并发使用）
-
-- API（`ZM_QA_REAL=1`，进程内，15:15–15:28 CST）：20 通过 / 1 失败（13 分钟）
-  - 失败：`test_ac4_memory_recall_with_citation`：多个回合因 429 / 流中断失败未提交，章节只到 2 → BUG-006
-  - 契约测试 9/9 通过（含 BUG-002 `qwen-tts` 别名、BUG-005 去重）
-- E2E（`scripts/dev.sh --prod` 真实模型，`ZM_MODE=real`，15:33–15:50 CST）：6 通过 / 3 失败（16.5 分钟）
-  - AC-2、AC-3：回合「生成失败（LLMUnavailable）」，自动点「重试」2 次后仍失败 → BUG-006
-  - AC-9：「学习小结」经 Next 代理超时显示 Internal Server Error → BUG-007
-- 以上真实模型结果早于 API v1.2（后端尚未提交的流中断续写等改动），需复测
+## API 冒烟 (pytest, 真实模型) — 本轮结果不计入
+- 15:57–16:00 CST 跑 `scripts/qa.sh api-real`：12 通过 / 9 失败，但运行期间后端工作区正在被修改（`turn_graph.py` 等 15:56–16:03 有写入，并新提交 fdf6410），
+  失败多为中途代码不一致导致的 `AttributeError`，另有 DashScope 429 / 连接错误 / 音频下载 ConnectTimeout（网络环境）。
+- 单独复跑 `test_ac7_safety`、`test_ac2_idempotent_and_retry`、`test_ac3_npc_autonomy_god_view`（真实模型）均通过；`test_tts_legacy_model_name_still_works` 仅因音频 URL 下载超时失败（别名重试本身生效）。
+- 待后端改动落定后再完整复测；BUG-006 / BUG-007 仍为 OPEN（负责人未标 FIXED），本轮未跑真实模型 E2E。
+- 16:04 CST 在当前工作区（HEAD fdf6410 + 后端未提交改动）复跑兜底 API 冒烟：20 passed, 1 skipped。
