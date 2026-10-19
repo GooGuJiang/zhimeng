@@ -1,4 +1,4 @@
-import { API_BASE, ApiError } from "./api";
+import { API_BASE, ApiError, errorText, toApiError } from "./api";
 
 export type SSEHandler = (event: string, data: unknown) => void;
 
@@ -12,22 +12,19 @@ export async function streamSSE(
   onEvent: SSEHandler,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/api${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify(body ?? {}),
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    let msg = `请求失败 (${res.status})`;
-    try {
-      const j = await res.json();
-      msg = typeof j.detail === "string" ? j.detail : msg;
-    } catch {
-      /* ignore */
-    }
-    throw new ApiError(msg, res.status);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(body ?? {}),
+      signal, // no overall timeout: streams stay open while events keep arriving
+    });
+  } catch (e) {
+    if ((e as Error)?.name === "AbortError" && signal?.aborted) throw e;
+    throw new ApiError(errorText(e), 0, (e as Error)?.name, String(e));
   }
+  if (!res.ok || !res.body) throw await toApiError(res);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
