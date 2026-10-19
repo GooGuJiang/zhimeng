@@ -2,3 +2,4 @@ node_modules
 .next
 openui/*.txt
 openui/*.json
+src/app/globals.css

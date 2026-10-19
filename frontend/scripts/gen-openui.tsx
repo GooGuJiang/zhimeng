@@ -10,7 +10,7 @@ const prompt = library.prompt({
   additionalRules: [
     "Use only facts present in the provided world JSON (names, ids, numbers). Never invent characters or items.",
     "Prefer the Narrative components (RelationGraph, WorldMap, Inventory, EventLine, KnowledgeCard, Choices) and wrap them in Panel/Col.",
-    "Buttons advance the story with @Act(\"…\"); keep at most 3 buttons per panel.",
+    'Buttons advance the story with @Act("…"); keep at most 3 buttons per panel.',
   ],
   examples: [
     `root = Col([panel])\npanel = Panel([head, hp, clues], "沈墨的状态", "gold")\nhead = Row([Stat("所在", "外滩"), Stat("时辰", "黄昏")], 4, "between")\nhp = Meter("体力", 72, 100, "rose")\nclues = Meter("线索", 3, 10, "azure")`,
