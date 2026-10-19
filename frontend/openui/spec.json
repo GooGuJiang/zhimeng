@@ -1,0 +1,680 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "Col": {
+      "$ref": "#/$defs/Col"
+    },
+    "Row": {
+      "$ref": "#/$defs/Row"
+    },
+    "Grid": {
+      "$ref": "#/$defs/Grid"
+    },
+    "Panel": {
+      "$ref": "#/$defs/Panel"
+    },
+    "Divider": {
+      "$ref": "#/$defs/Divider"
+    },
+    "Title": {
+      "$ref": "#/$defs/Title"
+    },
+    "Text": {
+      "$ref": "#/$defs/Text"
+    },
+    "Badge": {
+      "$ref": "#/$defs/Badge"
+    },
+    "Stat": {
+      "$ref": "#/$defs/Stat"
+    },
+    "Meter": {
+      "$ref": "#/$defs/Meter"
+    },
+    "Button": {
+      "$ref": "#/$defs/Button"
+    },
+    "RelationGraph": {
+      "$ref": "#/$defs/RelationGraph"
+    },
+    "WorldMap": {
+      "$ref": "#/$defs/WorldMap"
+    },
+    "Inventory": {
+      "$ref": "#/$defs/Inventory"
+    },
+    "EventLine": {
+      "$ref": "#/$defs/EventLine"
+    },
+    "KnowledgeCard": {
+      "$ref": "#/$defs/KnowledgeCard"
+    },
+    "Choices": {
+      "$ref": "#/$defs/Choices"
+    }
+  },
+  "required": [
+    "Col",
+    "Row",
+    "Grid",
+    "Panel",
+    "Divider",
+    "Title",
+    "Text",
+    "Badge",
+    "Stat",
+    "Meter",
+    "Button",
+    "RelationGraph",
+    "WorldMap",
+    "Inventory",
+    "EventLine",
+    "KnowledgeCard",
+    "Choices"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "Col": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {}
+        },
+        "gap": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "children"
+      ],
+      "additionalProperties": false,
+      "description": "Vertical stack. gap counts 4px steps (default 3)."
+    },
+    "Row": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {}
+        },
+        "gap": {
+          "type": "number"
+        },
+        "justify": {
+          "type": "string",
+          "enum": [
+            "start",
+            "between",
+            "end"
+          ]
+        }
+      },
+      "required": [
+        "children"
+      ],
+      "additionalProperties": false,
+      "description": "Horizontal row, wraps on narrow screens."
+    },
+    "Grid": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {}
+        },
+        "columns": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "children"
+      ],
+      "additionalProperties": false,
+      "description": "Responsive grid of equal columns (default 2); collapses on phones."
+    },
+    "Panel": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {}
+        },
+        "title": {
+          "type": "string"
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "ink",
+            "muted",
+            "gold",
+            "rose",
+            "jade",
+            "azure",
+            "danger"
+          ]
+        },
+        "icon": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "children"
+      ],
+      "additionalProperties": false,
+      "description": "A titled card section. tone tints its accent."
+    },
+    "Divider": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "description": "A thin silk-thread divider."
+    },
+    "Title": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "sm",
+            "md",
+            "lg"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false,
+      "description": "Heading. size \"sm\" | \"md\" | \"lg\"."
+    },
+    "Text": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "ink",
+            "muted",
+            "gold",
+            "rose",
+            "jade",
+            "azure",
+            "danger"
+          ]
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "xs",
+            "sm",
+            "md"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false,
+      "description": "Body text. tone colors it."
+    },
+    "Badge": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "ink",
+            "muted",
+            "gold",
+            "rose",
+            "jade",
+            "azure",
+            "danger"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false,
+      "description": "Small tag such as a mood, a status or a time label."
+    },
+    "Stat": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "hint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "additionalProperties": false,
+      "description": "A labelled value, e.g. Stat(\"第\", \"3 章\")."
+    },
+    "Meter": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "ink",
+            "muted",
+            "gold",
+            "rose",
+            "jade",
+            "azure",
+            "danger"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "additionalProperties": false,
+      "description": "A labelled bar for a stat (hp, 线索, 声望...). max defaults to 100."
+    },
+    "Button": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/ActionExpression"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "solid",
+            "ghost"
+          ]
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "additionalProperties": false,
+      "description": "Action button. Without action it advances the story with its label (@Act). Use @Act/@Ask/@Inject/@ToAssistant."
+    },
+    "ActionExpression": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "open_url"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "continue_conversation"
+            },
+            "context": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "params": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RelationGraph": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "mood": {
+                "type": "string"
+              },
+              "emoji": {
+                "type": "string"
+              },
+              "is_player": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "affinity": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "source",
+              "target"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "additionalProperties": false,
+      "description": "Interactive character relationship graph. nodes [{id,label,role?,mood?,emoji?,is_player?}], edges [{source,target,type?,affinity -100..100}]. Tap a node for details."
+    },
+    "WorldMap": {
+      "type": "object",
+      "properties": {
+        "locations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
+              },
+              "characters": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "target"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "current": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "locations"
+      ],
+      "additionalProperties": false,
+      "description": "Interactive world map. locations [{id,name,x 0..100,y 0..100,description?,characters?}], edges [{source,target}], current = player location id. Tap a place to travel."
+    },
+    "Inventory": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "number"
+              },
+              "icon": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "additionalProperties": false,
+      "description": "The player's bag. items [{name, description?, quantity?, icon?}]. Tap an item to inspect or use it."
+    },
+    "EventLine": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "impact": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "additionalProperties": false,
+      "description": "One timeline entry: summary, time label, kind \"offscreen\"|\"world\"|\"player\"|\"injected\"|\"npc_action\"."
+    },
+    "KnowledgeCard": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "content"
+      ],
+      "additionalProperties": false,
+      "description": "Education-mode flip card: title on the front, content and source on the back."
+    },
+    "Choices": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "options"
+      ],
+      "additionalProperties": false,
+      "description": "A list of story choices; each runs @Act with its text. options [{id?, text, hint?}]."
+    }
+  },
+  "actions": {
+    "Act": {
+      "description": "Advance the story: the player performs this action, e.g. @Act(\"去码头找线人\").",
+      "params": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Ask": {
+      "description": "Ask the world memory a question about past events, e.g. @Ask(\"线人叫什么名字？\").",
+      "params": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Inject": {
+      "description": "God view: inject a world event, e.g. @Inject(\"码头突发大火\").",
+      "params": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

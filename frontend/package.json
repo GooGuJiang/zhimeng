@@ -1,0 +1,39 @@
+{
+  "name": "zhimeng-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "openui:prompt": "tsx scripts/gen-openui.tsx",
+    "openui:check": "tsx scripts/check-openui.tsx"
+  },
+  "dependencies": {
+    "@openuidev/lang-core": "^1.0.1",
+    "@openuidev/react-lang": "^1.0.1",
+    "html-to-image": "^1.11.13",
+    "lucide-react": "^1.59.0",
+    "next": "16.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@openuidev/cli": "^0.6.0",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.2",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "^5"
+  },
+  "packageManager": "pnpm@10.31.0"
+}

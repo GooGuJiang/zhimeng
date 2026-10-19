@@ -20,25 +20,11 @@ on the world/state payload (or SSE event `ui` with `{panel, program}`).
   (characters, relations, inventory, locations, stats). So structured state is still required (below).
 - Buttons in generated UI emit `@ToAssistant("我要去码头")` → frontend sends it as a free-input action to /play.
 
-## 2. Endpoints I'm coding against (please confirm/rename in API.md)
-- `POST /api/worlds/generate` body `{prompt, source_text?, genre?, tone?, length?, education_mode?, minor_mode?}` → **SSE**:
-  `event: progress data:{stage, message, percent}` … `event: world data:<World>` … `event: done`. (`event: error data:{message, retryable}`)
-- `POST /api/worlds/{id}/regenerate` (same SSE) ; `POST /api/worlds/{id}/confirm` → World
-- `GET /api/worlds/{id}` → World (full state incl. characters, locations, inventory, stats, ui, turns/history)
-- `POST /api/worlds/{id}/turns` body `{choice_id? , input?}` → **SSE**: `event: token data:{text}` (narration deltas),
-  `event: options data:{options:[{id,text}]}`, `event: offscreen data:{events:[Event]}`, `event: state data:<partial World>`,
-  `event: ui data:{panel, program}`, `event: asset data:{type:"image"|"audio", url, node_id}`, `event: safety data:{level, message}`, `event: done data:{turn_id}`
-  Failure must not corrupt progress; frontend retries the same request (please make it idempotent per `client_turn_id` if possible).
-- `GET /api/worlds/{id}/turns` → list of turns `{id, chapter, input, narration, options, created_at, assets}`
-- `POST /api/worlds/{id}/memory/query` body `{question}` → `{answer, citations:[{turn_id, chapter, excerpt}]}`
-- `GET /api/worlds/{id}/god` → `{npcs:[{id,name,mood,goal,location,recent_actions:[{t,summary}]}], timeline:[Event]}`
-- `POST /api/worlds/{id}/god/inject` body `{event}` → `{event, accepted}` (recorded in memory)
-- `GET /api/worlds/{id}/education` → `{cards:[{title, content, source?}], summary}`
-- `GET /api/worlds/{id}/export` → JSON save; `POST /api/worlds/import` body = that JSON → World
-- `POST /api/worlds/{id}/assets/regenerate` body `{node_id, type}`
-- `POST /api/safety/report` body `{world_id?, turn_id?, reason, detail}`
-- `GET /api/health`
-- Static asset URLs should be under `/api/...` (e.g. `/api/assets/xxx.png`) so the Next rewrite proxies them.
+## 2. Endpoints — SUPERSEDED
+API.md v1 is adopted as-is by the frontend. Section 1 is now a *nice-to-have*: API.md's `UIComponent.openui`
+field is exactly where an OpenUI Lang program can go. The frontend renders it if it parses against our library
+(`frontend/openui/system-prompt.txt`, regenerate with `pnpm openui:prompt`), otherwise it compiles `props` itself.
+Rules for `openui`: program must start with `root = Col(...)`; only components listed in the prompt.
 
 ## 3. CORS
 Frontend proxies `/api/*` → `http://localhost:8000/api/*` via Next rewrites, so CORS is not required, but allowing
