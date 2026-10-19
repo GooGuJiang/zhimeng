@@ -1,0 +1,17 @@
+{
+  "status": "ok",
+  "llm": false,
+  "fallback": true,
+  "llm_runtime": { "last_model": null, "switches": 0, "cooling": [] },
+  "models": {
+    "chat": "qwen-plus",
+    "fast": "qwen-turbo",
+    "embedding": "text-embedding-v3",
+    "image": "wanx2.1-t2i-turbo",
+    "tts": "qwen3-tts-flash",
+    "skeleton": "qwen-flash",
+    "chat_chain": ["qwen-plus", "qwen-plus-latest", "qwen-max", "qwen-turbo", "qwen-flash"],
+    "fast_chain": ["qwen-turbo", "qwen-flash", "qwen-plus", "qwen-plus-latest"]
+  },
+  "version": "1.0.0"
+}

@@ -1,0 +1,301 @@
+{
+  "components": [
+    {
+      "id": "events",
+      "type": "event_feed",
+      "title": "场外大事件",
+      "priority": 85,
+      "layout": { "area": "main", "size": "md" },
+      "props": {
+        "events": [
+          {
+            "id": "ev_1161bb71670f",
+            "world_id": "w_5a628f7c35ae",
+            "type": "offscreen",
+            "summary": "白玉兰为了找到失踪的姐妹，暗中前往十六铺码头打探消息",
+            "actor_ids": ["c_2"],
+            "location_id": "loc_3",
+            "turn": 1,
+            "chapter": 1,
+            "impact": "medium",
+            "timestamp": "2026-10-19T08:37:20.022528+00:00",
+            "in_world_time": "第1天·上午",
+            "seen": false
+          },
+          {
+            "id": "ev_fb0370bfae14",
+            "world_id": "w_5a628f7c35ae",
+            "type": "offscreen",
+            "summary": "沈墨言为了查明匿名信的来历，在报馆编辑部与人密谈",
+            "actor_ids": ["c_1"],
+            "location_id": "loc_1",
+            "turn": 1,
+            "chapter": 1,
+            "impact": "high",
+            "timestamp": "2026-10-19T08:37:20.020936+00:00",
+            "in_world_time": "第1天·上午",
+            "seen": false
+          },
+          {
+            "id": "ev_affe63c4beb0",
+            "world_id": "w_5a628f7c35ae",
+            "type": "npc_action",
+            "summary": "顾长庚警惕地环顾四周",
+            "actor_ids": ["c_3"],
+            "location_id": "loc_3",
+            "turn": 1,
+            "chapter": 1,
+            "impact": "low",
+            "timestamp": "2026-10-19T08:37:20.017260+00:00",
+            "in_world_time": "第1天·上午",
+            "seen": false
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "probe_ev_1161bb71670f",
+          "label": "追查此事",
+          "kind": "turn",
+          "payload": { "action": "打听白玉兰的动向：白玉兰为了找到失踪的姐妹，暗中前往十六铺" }
+        },
+        {
+          "id": "probe_ev_fb0370bfae14",
+          "label": "追查此事",
+          "kind": "turn",
+          "payload": { "action": "打听沈墨言的动向：沈墨言为了查明匿名信的来历，在报馆编辑部" }
+        }
+      ],
+      "openui": "root = Col([panel])\npanel = Panel([e0, e1, e2, b0], \"场外大事件\", \"muted\")\ne0 = EventLine(\"白玉兰为了找到失踪的姐妹，暗中前往十六铺码头打探消息\", \"第1天·上午\", \"offscreen\", \"medium\")\ne1 = EventLine(\"沈墨言为了查明匿名信的来历，在报馆编辑部与人密谈\", \"第1天·上午\", \"offscreen\", \"high\")\ne2 = EventLine(\"顾长庚警惕地环顾四周\", \"第1天·上午\", \"npc_action\", \"low\")\nb0 = Button(\"追查此事\", @Act(\"打听白玉兰的动向：白玉兰为了找到失踪的姐妹，暗中前往十六铺\"), \"ghost\")",
+      "ai_generated": true,
+      "ai_label": "内容由AI生成"
+    },
+    {
+      "id": "relations",
+      "type": "relationship_graph",
+      "title": "人物关系",
+      "priority": 80,
+      "layout": { "area": "side", "size": "md" },
+      "props": {
+        "nodes": [
+          {
+            "id": "player",
+            "label": "你",
+            "role": "报社记者",
+            "mood": "好奇",
+            "is_player": true,
+            "emoji": "🧭"
+          },
+          {
+            "id": "c_1",
+            "label": "沈墨言",
+            "role": "报社主编",
+            "mood": "疲惫",
+            "is_player": false,
+            "emoji": "🖋️"
+          },
+          {
+            "id": "c_2",
+            "label": "白玉兰",
+            "role": "百乐门舞女",
+            "mood": "警惕",
+            "is_player": false,
+            "emoji": "🌸"
+          },
+          {
+            "id": "c_3",
+            "label": "顾长庚",
+            "role": "巡捕房探长",
+            "mood": "镇定",
+            "is_player": false,
+            "emoji": "🕵️"
+          }
+        ],
+        "edges": [
+          { "source": "c_1", "target": "player", "type": "上级/引路人", "affinity": 11 },
+          { "source": "c_1", "target": "c_3", "type": "暗中提防", "affinity": 67 },
+          { "source": "c_2", "target": "player", "type": "初识", "affinity": 30 },
+          { "source": "c_2", "target": "c_1", "type": "互相利用", "affinity": -56 },
+          { "source": "c_3", "target": "player", "type": "初识", "affinity": 22 },
+          { "source": "c_3", "target": "c_1", "type": "对手", "affinity": 53 }
+        ]
+      },
+      "actions": [
+        {
+          "id": "talk_c_2",
+          "label": "与白玉兰交谈",
+          "kind": "turn",
+          "payload": { "action": "和白玉兰交谈" }
+        },
+        { "id": "talk_c_3", "label": "与顾长庚交谈", "kind": "turn", "payload": { "action": "和顾长庚交谈" } }
+      ],
+      "openui": "root = Col([panel])\npanel = Panel([g, btns], \"人物关系\", \"rose\")\ng = RelationGraph([{id: \"player\", label: \"你\", role: \"报社记者\", mood: \"好奇\", is_player: true, emoji: \"🧭\"}, {id: \"c_1\", label: \"沈墨言\", role: \"报社主编\", mood: \"疲惫\", is_player: false, emoji: \"🖋️\"}, {id: \"c_2\", label: \"白玉兰\", role: \"百乐门舞女\", mood: \"警惕\", is_player: false, emoji: \"🌸\"}, {id: \"c_3\", label: \"顾长庚\", role: \"巡捕房探长\", mood: \"镇定\", is_player: false, emoji: \"🕵️\"}], [{source: \"c_1\", target: \"player\", type: \"上级/引路人\", affinity: 11}, {source: \"c_1\", target: \"c_3\", type: \"暗中提防\", affinity: 67}, {source: \"c_2\", target: \"player\", type: \"初识\", affinity: 30}, {source: \"c_2\", target: \"c_1\", type: \"互相利用\", affinity: -56}, {source: \"c_3\", target: \"player\", type: \"初识\", affinity: 22}, {source: \"c_3\", target: \"c_1\", type: \"对手\", affinity: 53}])\nbtns = Row([Button(\"与白玉兰交谈\", @Act(\"和白玉兰交谈\"), \"ghost\"), Button(\"与顾长庚交谈\", @Act(\"和顾长庚交谈\"), \"ghost\")])",
+      "ai_generated": true,
+      "ai_label": "内容由AI生成"
+    },
+    {
+      "id": "status",
+      "type": "status_panel",
+      "title": "角色状态",
+      "priority": 70,
+      "layout": { "area": "side", "size": "md" },
+      "props": {
+        "player": { "name": "你", "role": "报社记者", "location": "十六铺码头", "hp": 100, "mood": "好奇" },
+        "stats": { "线索": 10, "声望": 32, "危险": 20 },
+        "time": "第1天·上午",
+        "chapter": 1,
+        "turn": 1,
+        "tags": ["民国悬疑", "12+"]
+      },
+      "actions": [
+        { "id": "look", "label": "环顾四周", "kind": "turn", "payload": { "action": "仔细观察十六铺码头" } },
+        {
+          "id": "recall",
+          "label": "回忆线索",
+          "kind": "query",
+          "payload": { "question": "到目前为止我掌握了哪些关键线索？" }
+        }
+      ],
+      "openui": "root = Col([panel])\npanel = Panel([head, hp, m0, m1, m2, btns], \"你的状态\", \"gold\")\nhead = Row([Stat(\"所在\", \"十六铺码头\"), Stat(\"时辰\", \"第1天·上午\"), Stat(\"进度\", \"第1章·第1回合\")], 2, \"between\")\nhp = Meter(\"体力\", 100, 100, \"rose\")\nm0 = Meter(\"线索\", 10, 100, \"azure\")\nm1 = Meter(\"声望\", 32, 100, \"azure\")\nm2 = Meter(\"危险\", 20, 100, \"azure\")\nbtns = Row([Button(\"环顾四周\", @Act(\"仔细观察十六铺码头\"), \"ghost\"), Button(\"回忆线索\", @Ask(\"到目前为止我掌握了哪些关键线索？\"), \"ghost\")])",
+      "ai_generated": true,
+      "ai_label": "内容由AI生成"
+    },
+    {
+      "id": "choices",
+      "type": "choice_list",
+      "title": "下一步",
+      "priority": 65,
+      "layout": { "area": "bottom", "size": "sm" },
+      "props": {
+        "options": [
+          { "id": "opt_1", "text": "向顾长庚追问细节" },
+          { "id": "opt_2", "text": "调查仓库铁门" },
+          { "id": "opt_3", "text": "前往法租界巡捕房" }
+        ]
+      },
+      "actions": [
+        {
+          "id": "opt_1",
+          "label": "向顾长庚追问细节",
+          "kind": "turn",
+          "payload": { "action": "向顾长庚追问细节", "option_id": "opt_1" }
+        },
+        {
+          "id": "opt_2",
+          "label": "调查仓库铁门",
+          "kind": "turn",
+          "payload": { "action": "调查仓库铁门", "option_id": "opt_2" }
+        },
+        {
+          "id": "opt_3",
+          "label": "前往法租界巡捕房",
+          "kind": "turn",
+          "payload": { "action": "前往法租界巡捕房", "option_id": "opt_3" }
+        }
+      ],
+      "openui": "root = Col([panel])\npanel = Panel([c], \"下一步\", \"ink\")\nc = Choices([{id: \"opt_1\", text: \"向顾长庚追问细节\"}, {id: \"opt_2\", text: \"调查仓库铁门\"}, {id: \"opt_3\", text: \"前往法租界巡捕房\"}])",
+      "ai_generated": true,
+      "ai_label": "内容由AI生成"
+    },
+    {
+      "id": "map",
+      "type": "map",
+      "title": "世界地图",
+      "priority": 55,
+      "layout": { "area": "side", "size": "md" },
+      "props": {
+        "locations": [
+          {
+            "id": "loc_1",
+            "name": "报馆编辑部",
+            "x": 20.4,
+            "y": 30.6,
+            "description": "油墨味弥漫，打字机声不断",
+            "characters": ["沈墨言"]
+          },
+          {
+            "id": "loc_2",
+            "name": "百乐门舞厅",
+            "x": 46.2,
+            "y": 11.2,
+            "description": "灯红酒绿，失踪歌女曾在此驻唱",
+            "characters": []
+          },
+          {
+            "id": "loc_3",
+            "name": "十六铺码头",
+            "x": 80.0,
+            "y": 31.9,
+            "description": "货轮汽笛低鸣，苦力与帮派混杂",
+            "characters": ["白玉兰", "顾长庚"]
+          },
+          {
+            "id": "loc_4",
+            "name": "法租界巡捕房",
+            "x": 69.3,
+            "y": 75.0,
+            "description": "高墙铁门，档案室戒备森严",
+            "characters": []
+          }
+        ],
+        "edges": [
+          { "source": "loc_1", "target": "loc_2" },
+          { "source": "loc_1", "target": "loc_4" },
+          { "source": "loc_2", "target": "loc_3" },
+          { "source": "loc_3", "target": "loc_4" }
+        ],
+        "current_location_id": "loc_3"
+      },
+      "actions": [
+        {
+          "id": "go_loc_2",
+          "label": "前往百乐门舞厅",
+          "kind": "navigate",
+          "payload": { "location_id": "loc_2", "action": "前往百乐门舞厅" }
+        },
+        {
+          "id": "go_loc_4",
+          "label": "前往法租界巡捕房",
+          "kind": "navigate",
+          "payload": { "location_id": "loc_4", "action": "前往法租界巡捕房" }
+        }
+      ],
+      "openui": "root = Col([panel])\npanel = Panel([m], \"世界地图\", \"azure\")\nm = WorldMap([{id: \"loc_1\", name: \"报馆编辑部\", x: 20.4, y: 30.6, description: \"油墨味弥漫，打字机声不断\", characters: [\"沈墨言\"]}, {id: \"loc_2\", name: \"百乐门舞厅\", x: 46.2, y: 11.2, description: \"灯红酒绿，失踪歌女曾在此驻唱\", characters: []}, {id: \"loc_3\", name: \"十六铺码头\", x: 80.0, y: 31.9, description: \"货轮汽笛低鸣，苦力与帮派混杂\", characters: [\"白玉兰\", \"顾长庚\"]}, {id: \"loc_4\", name: \"法租界巡捕房\", x: 69.3, y: 75.0, description: \"高墙铁门，档案室戒备森严\", characters: []}], [{source: \"loc_1\", target: \"loc_2\"}, {source: \"loc_1\", target: \"loc_4\"}, {source: \"loc_2\", target: \"loc_3\"}, {source: \"loc_3\", target: \"loc_4\"}], \"loc_3\")",
+      "ai_generated": true,
+      "ai_label": "内容由AI生成"
+    },
+    {
+      "id": "inventory",
+      "type": "inventory",
+      "title": "随身物品",
+      "priority": 54,
+      "layout": { "area": "side", "size": "sm" },
+      "props": {
+        "items": [
+          { "id": "it_1", "name": "记者证", "description": "上海《申报》外勤记者证", "quantity": 1 },
+          { "id": "it_2", "name": "钢笔", "description": "随身携带的派克钢笔", "quantity": 1 },
+          { "id": "it_3", "name": "袖扣照片", "description": "刻着“申”字的袖扣照片", "quantity": 1 }
+        ]
+      },
+      "actions": [
+        {
+          "id": "use_it_1",
+          "label": "查看记者证",
+          "kind": "turn",
+          "payload": { "action": "仔细查看记者证" }
+        },
+        { "id": "use_it_2", "label": "查看钢笔", "kind": "turn", "payload": { "action": "仔细查看钢笔" } },
+        {
+          "id": "use_it_3",
+          "label": "查看袖扣照片",
+          "kind": "turn",
+          "payload": { "action": "仔细查看袖扣照片" }
+        }
+      ],
+      "openui": "root = Col([panel])\npanel = Panel([inv], \"随身物品\", \"jade\")\ninv = Inventory([{id: \"it_1\", name: \"记者证\", description: \"上海《申报》外勤记者证\", quantity: 1}, {id: \"it_2\", name: \"钢笔\", description: \"随身携带的派克钢笔\", quantity: 1}, {id: \"it_3\", name: \"袖扣照片\", description: \"刻着“申”字的袖扣照片\", quantity: 1}])",
+      "ai_generated": true,
+      "ai_label": "内容由AI生成"
+    }
+  ],
+  "ai_generated": true
+}

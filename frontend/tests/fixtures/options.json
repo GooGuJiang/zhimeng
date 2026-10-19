@@ -1,0 +1,7 @@
+{
+  "options": [
+    { "id": "opt_1", "text": "向顾长庚追问细节", "hint": null },
+    { "id": "opt_2", "text": "调查仓库铁门", "hint": null },
+    { "id": "opt_3", "text": "前往法租界巡捕房", "hint": null }
+  ]
+}

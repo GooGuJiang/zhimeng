@@ -1,0 +1,66 @@
+[
+  {
+    "id": "t_e2a9fc21bca1",
+    "world_id": "w_5a628f7c35ae",
+    "index": 1,
+    "chapter": 1,
+    "action": "我去码头找线人",
+    "narration": "片刻犹豫后，你去码头找线人。十六铺码头里，货轮汽笛低鸣，苦力与帮派混杂。顾长庚压低了声音，低声说：“小心身边的人。”你隐约听说：沈墨言为了查明匿名信的来历，在报馆编辑部与人密谈。远处似乎有人在注视着你。",
+    "options": [
+      { "id": "opt_1", "text": "向顾长庚追问细节", "hint": null },
+      { "id": "opt_2", "text": "调查仓库铁门", "hint": null },
+      { "id": "opt_3", "text": "前往法租界巡捕房", "hint": null }
+    ],
+    "events": [
+      {
+        "id": "ev_affe63c4beb0",
+        "world_id": "w_5a628f7c35ae",
+        "type": "npc_action",
+        "summary": "顾长庚警惕地环顾四周",
+        "actor_ids": ["c_3"],
+        "location_id": "loc_3",
+        "turn": 1,
+        "chapter": 1,
+        "impact": "low",
+        "timestamp": "2026-10-19T08:37:20.017260+00:00",
+        "in_world_time": "第1天·上午",
+        "seen": false
+      },
+      {
+        "id": "ev_fb0370bfae14",
+        "world_id": "w_5a628f7c35ae",
+        "type": "offscreen",
+        "summary": "沈墨言为了查明匿名信的来历，在报馆编辑部与人密谈",
+        "actor_ids": ["c_1"],
+        "location_id": "loc_1",
+        "turn": 1,
+        "chapter": 1,
+        "impact": "high",
+        "timestamp": "2026-10-19T08:37:20.020936+00:00",
+        "in_world_time": "第1天·上午",
+        "seen": false
+      },
+      {
+        "id": "ev_1161bb71670f",
+        "world_id": "w_5a628f7c35ae",
+        "type": "offscreen",
+        "summary": "白玉兰为了找到失踪的姐妹，暗中前往十六铺码头打探消息",
+        "actor_ids": ["c_2"],
+        "location_id": "loc_3",
+        "turn": 1,
+        "chapter": 1,
+        "impact": "medium",
+        "timestamp": "2026-10-19T08:37:20.022528+00:00",
+        "in_world_time": "第1天·上午",
+        "seen": false
+      }
+    ],
+    "facts": ["你去码头找线人", "顾长庚与你有过一番交谈", "你来到了十六铺码头"],
+    "asset_ids": ["ast_eae5f3642234", "ast_7347c42597bc"],
+    "key_scene": true,
+    "source": "fallback",
+    "created_at": "2026-10-19T08:37:20.028682+00:00",
+    "ai_generated": true,
+    "ai_label": "内容由AI生成"
+  }
+]

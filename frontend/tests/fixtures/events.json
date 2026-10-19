@@ -1,0 +1,30 @@
+[
+  {
+    "id": "ev_1161bb71670f",
+    "world_id": "w_5a628f7c35ae",
+    "type": "offscreen",
+    "summary": "白玉兰为了找到失踪的姐妹，暗中前往十六铺码头打探消息",
+    "actor_ids": ["c_2"],
+    "location_id": "loc_3",
+    "turn": 1,
+    "chapter": 1,
+    "impact": "medium",
+    "timestamp": "2026-10-19T08:37:20.022528+00:00",
+    "in_world_time": "第1天·上午",
+    "seen": false
+  },
+  {
+    "id": "ev_fb0370bfae14",
+    "world_id": "w_5a628f7c35ae",
+    "type": "offscreen",
+    "summary": "沈墨言为了查明匿名信的来历，在报馆编辑部与人密谈",
+    "actor_ids": ["c_1"],
+    "location_id": "loc_1",
+    "turn": 1,
+    "chapter": 1,
+    "impact": "high",
+    "timestamp": "2026-10-19T08:37:20.020936+00:00",
+    "in_world_time": "第1天·上午",
+    "seen": false
+  }
+]

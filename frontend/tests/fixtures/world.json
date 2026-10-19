@@ -1,0 +1,189 @@
+{
+  "id": "w_5a628f7c35ae",
+  "title": "雾锁申江",
+  "genre": "民国悬疑",
+  "tone": "阴郁而紧张，暗流涌动",
+  "era": "1930年代·十里洋场",
+  "setting": "黄浦江畔霓虹与雾气交织，报馆、舞厅与码头各怀秘密。一桩离奇命案让各方势力浮出水面，真相被层层报纸版面掩盖。（灵感：一个民国上海滩的侦探故事，我是报社记者）",
+  "mode": "story",
+  "language": "zh",
+  "premise": "一个民国上海滩的侦探故事，我是报社记者",
+  "initial_conflict": "百乐门当红歌女深夜失踪，现场只留下一枚刻着“申”字的袖扣；警署草草结案，而报社主编却收到了一封匿名信。",
+  "opening_scene": "细雨落在报馆的玻璃窗上。你刚交完稿，主编沈墨言把一封没有署名的信推到你面前：“百乐门的案子，没那么简单。”信封里只有一张照片——一枚刻着“申”字的袖扣。窗外，一辆黑色轿车在雨中缓缓停下。",
+  "player": { "name": "你", "role": "报社记者", "character_id": "player" },
+  "locations": [
+    {
+      "id": "loc_1",
+      "name": "报馆编辑部",
+      "description": "油墨味弥漫，打字机声不断",
+      "x": 20.4,
+      "y": 30.6,
+      "connections": ["loc_2", "loc_4"],
+      "interactables": ["旧报纸合订本", "主编的抽屉"]
+    },
+    {
+      "id": "loc_2",
+      "name": "百乐门舞厅",
+      "description": "灯红酒绿，失踪歌女曾在此驻唱",
+      "x": 46.2,
+      "y": 11.2,
+      "connections": ["loc_1", "loc_3"],
+      "interactables": ["后台化妆间", "点歌簿"]
+    },
+    {
+      "id": "loc_3",
+      "name": "十六铺码头",
+      "description": "货轮汽笛低鸣，苦力与帮派混杂",
+      "x": 80.0,
+      "y": 31.9,
+      "connections": ["loc_2", "loc_4"],
+      "interactables": ["货箱", "仓库铁门"]
+    },
+    {
+      "id": "loc_4",
+      "name": "法租界巡捕房",
+      "description": "高墙铁门，档案室戒备森严",
+      "x": 69.3,
+      "y": 75.0,
+      "connections": ["loc_1", "loc_3"],
+      "interactables": ["案卷柜", "值班登记簿"]
+    }
+  ],
+  "characters": [
+    {
+      "id": "player",
+      "name": "你",
+      "role": "报社记者",
+      "persona": "玩家角色",
+      "goals": ["由你书写"],
+      "relations": [],
+      "location_id": "loc_3",
+      "mood": "好奇",
+      "status": "活跃",
+      "is_player": true,
+      "avatar_emoji": "🧭"
+    },
+    {
+      "id": "c_1",
+      "name": "沈墨言",
+      "role": "报社主编",
+      "persona": "老练沉稳，惜字如金，暗中保护消息源",
+      "goals": ["查明匿名信的来历", "保住报馆"],
+      "relations": [
+        { "target_id": "player", "type": "上级/引路人", "affinity": 11, "note": null },
+        { "target_id": "c_3", "type": "暗中提防", "affinity": 67, "note": null }
+      ],
+      "location_id": "loc_1",
+      "mood": "疲惫",
+      "status": "活跃",
+      "is_player": false,
+      "avatar_emoji": "🖋️"
+    },
+    {
+      "id": "c_2",
+      "name": "白玉兰",
+      "role": "百乐门舞女",
+      "persona": "表面风情万种，实则心思缜密",
+      "goals": ["找到失踪的姐妹", "离开上海"],
+      "relations": [
+        { "target_id": "player", "type": "初识", "affinity": 30, "note": null },
+        { "target_id": "c_1", "type": "互相利用", "affinity": -56, "note": null }
+      ],
+      "location_id": "loc_3",
+      "mood": "警惕",
+      "status": "活跃",
+      "is_player": false,
+      "avatar_emoji": "🌸"
+    },
+    {
+      "id": "c_3",
+      "name": "顾长庚",
+      "role": "巡捕房探长",
+      "persona": "精明世故，游走于黑白之间",
+      "goals": ["尽快结案", "升迁"],
+      "relations": [
+        { "target_id": "player", "type": "初识", "affinity": 22, "note": null },
+        { "target_id": "c_1", "type": "对手", "affinity": 53, "note": null }
+      ],
+      "location_id": "loc_3",
+      "mood": "镇定",
+      "status": "活跃",
+      "is_player": false,
+      "avatar_emoji": "🕵️"
+    }
+  ],
+  "items": [
+    {
+      "id": "it_1",
+      "name": "记者证",
+      "description": "上海《申报》外勤记者证",
+      "owner_id": "player",
+      "quantity": 1
+    },
+    {
+      "id": "it_2",
+      "name": "钢笔",
+      "description": "随身携带的派克钢笔",
+      "owner_id": "player",
+      "quantity": 1
+    },
+    {
+      "id": "it_3",
+      "name": "袖扣照片",
+      "description": "刻着“申”字的袖扣照片",
+      "owner_id": "player",
+      "quantity": 1
+    }
+  ],
+  "knowledge_cards": [],
+  "opening_options": [
+    { "id": "opt_1", "text": "拆开信封仔细查看照片", "hint": null },
+    { "id": "opt_2", "text": "去百乐门找失踪歌女的同伴", "hint": null },
+    { "id": "opt_3", "text": "到码头找线人阿福打听消息", "hint": null }
+  ],
+  "state": {
+    "turn": 1,
+    "chapter": 1,
+    "time": "第1天·上午",
+    "day": 1,
+    "player_location_id": "loc_3",
+    "flags": {
+      "gen_request": {
+        "prompt": "一个民国上海滩的侦探故事，我是报社记者",
+        "genre": null,
+        "tone": null,
+        "length": "short",
+        "language": "zh",
+        "mode": "story",
+        "source_text": null,
+        "minor_mode": false,
+        "rating": "teen",
+        "refine": null
+      },
+      "gen_token": "b67089e57b"
+    },
+    "hp": 100,
+    "stats": { "线索": 10, "声望": 32, "危险": 20 }
+  },
+  "rating": "teen",
+  "minor_mode": false,
+  "status": "active",
+  "created_at": "2026-10-19T08:37:19.139700+00:00",
+  "updated_at": "2026-10-19T08:37:20.040567+00:00",
+  "source": "fallback",
+  "detail_status": "complete",
+  "gen_request": {
+    "prompt": "一个民国上海滩的侦探故事，我是报社记者",
+    "genre": null,
+    "tone": null,
+    "length": "short",
+    "language": "zh",
+    "mode": "story",
+    "source_text": null,
+    "minor_mode": false,
+    "rating": "teen",
+    "refine": null
+  },
+  "ai_generated": true,
+  "ai_label": "内容由AI生成"
+}

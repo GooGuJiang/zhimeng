@@ -11,7 +11,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "openui:prompt": "tsx scripts/gen-openui.tsx",
-    "openui:check": "tsx scripts/check-openui.tsx"
+    "openui:check": "tsx scripts/check-openui.tsx",
+    "test:mock": "playwright test -c tests"
   },
   "dependencies": {
     "@openuidev/lang-core": "^1.0.1",
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@openuidev/cli": "^0.6.0",
+    "@playwright/test": "1.56.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
