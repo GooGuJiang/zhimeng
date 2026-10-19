@@ -149,6 +149,7 @@ pnpm dev            # http://localhost:3000
 |---|---|---|
 | `DASHSCOPE_API_KEY` | 空 | 阿里云百炼 API Key（[获取](https://bailian.console.aliyun.com/?apiKey=1)）。**只保存在后端环境变量 / `.env`，绝不下发浏览器**。为空 → 兜底模式 |
 | `ZM_FORCE_FALLBACK` | `0` | `1` 时完全不调用远程模型（CI / 离线演示） |
+| `ZM_DISABLE_IMAGE` | `1`（.env.example / compose / dev.sh） | `1` = 不调用百炼生图，插画返回占位 SVG（`source=fallback`，仍去重、不后台升级）；`0` = 真实生图。配音与大模型不受影响 |
 | `ZM_DATA_DIR` | `backend/data` | SQLite、ChromaDB、生成资产所在目录 |
 | `CHAT_MODEL` / `FAST_MODEL` | `qwen-plus` / `qwen-turbo` | 叙事模型 / 快速决策与审核模型 |
 | `EMBEDDING_MODEL` | `text-embedding-v3` | 记忆向量模型 |
@@ -210,6 +211,27 @@ ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tes
 | 教育模式 | `11-education-input.png` · `12-education-play.png` · `13-education-summary.png` |
 
 （均位于 `docs/screens/`，由 `pnpm demo` 生成；应用尚未可运行时该目录为空，见 BUGS.md。）
+
+## Docker 运行
+
+```bash
+cp .env.example .env              # 可填 DASHSCOPE_API_KEY；留空 = 本地兜底模式
+docker compose up -d --build      # 前端 http://localhost:3000 · 后端 http://localhost:8000
+docker compose ps                 # 两个服务均应为 healthy
+curl http://localhost:3000/api/health
+docker compose logs -f backend
+docker compose down               # 停止（数据保留在命名卷中）；down -v 连同数据一起删除
+```
+
+- 镜像：`backend/Dockerfile`（python:3.12-slim，`uvicorn app.main:app` 监听 8000，非 root）、`frontend/Dockerfile`（pnpm 多阶段，Next standalone，`node server.js` 监听 3000）。
+- 代理：浏览器只访问前端；`/api/*`（含生成资产 `/api/static/assets`）经 compose 内部网络转发到 `http://backend:8000`。Next 的 rewrites 在**构建期**确定，
+  因此后端地址以构建参数 `BACKEND_ORIGIN` 传入（compose 已设置），代理超时 `ZM_PROXY_TIMEOUT_MS` 同理。
+- 数据：命名卷 `zm-db`（`/data`，SQLite `zhimeng.db`）、`zm-chroma`（`/data/chroma`，ChromaDB）、`zm-assets`（`/data/assets`，插画/配音）。
+- 密钥：`DASHSCOPE_API_KEY` 来自 `.env`（`env_file` 与 `${DASHSCOPE_API_KEY:-}`），只进入后端容器；为空时入口脚本强制 `ZM_FORCE_FALLBACK=1`，全流程可离线演示。
+- 成本：compose 默认 `ZM_DISABLE_IMAGE=1`（插画用占位 SVG，不调用百炼生图）；需要真实插画时在 `.env` 设 `ZM_DISABLE_IMAGE=0`。
+- 端口冲突：如本机已用 `scripts/dev.sh` 占用 3000/8000，先 `scripts/stop.sh`（只按端口停进程），或在 `.env` 改 `FRONTEND_PORT` / `BACKEND_PORT`。
+- 排障：若前端 `/api/*` 超时而 `curl localhost:8000/api/health` 正常，说明容器间流量被宿主防火墙拦截（例如宿主残留 `iptables-legacy` 的 `FORWARD DROP`）。
+  compose 固定网桥名为 `zm-br0`，可放行：`sudo iptables-legacy -I DOCKER-USER -i zm-br0 -o zm-br0 -j ACCEPT`（本开发机即属此情况）。
 
 ## 实际取舍
 

@@ -20,6 +20,8 @@ const nextConfig: NextConfig = {
   // Do not gzip-buffer proxied Server-Sent Events.
   compress: false,
   experimental: { proxyTimeout: PROXY_TIMEOUT_MS },
+  // Docker 构建时（frontend/Dockerfile 设置 NEXT_OUTPUT=standalone）输出独立服务器；本地 dev/start 不受影响
+  ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" as const } : {}),
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${BACKEND}/api/:path*` }];
   },

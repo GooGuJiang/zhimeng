@@ -40,6 +40,8 @@ if [[ -n "$_PRESET_KEY" ]]; then export DASHSCOPE_API_KEY="$_PRESET_KEY"; fi
 unset _PRESET_KEY
 [[ -z "${DASHSCOPE_API_KEY:-}" ]] && unset DASHSCOPE_API_KEY
 [[ $MODE_FALLBACK -eq 1 ]] && export ZM_FORCE_FALLBACK=1
+# 控制成本：默认关闭真实插画生成（使用占位图）；需要真实插画时显式 ZM_DISABLE_IMAGE=0 scripts/dev.sh
+export ZM_DISABLE_IMAGE="${ZM_DISABLE_IMAGE:-1}"
 
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
@@ -48,7 +50,7 @@ export BACKEND_ORIGIN="${BACKEND_ORIGIN:-http://localhost:$BACKEND_PORT}"
 if [[ "${ZM_FORCE_FALLBACK:-0}" =~ ^(1|true|yes)$ ]]; then
   echo "[dev] 模型模式: 本地兜底 (ZM_FORCE_FALLBACK=1)"
 elif [[ -n "${DASHSCOPE_API_KEY:-}" ]]; then
-  echo "[dev] 模型模式: 阿里云百炼 (DASHSCOPE_API_KEY 已配置)"
+  echo "[dev] 模型模式: 阿里云百炼 (DASHSCOPE_API_KEY 已配置；ZM_DISABLE_IMAGE=${ZM_DISABLE_IMAGE} → $([[ $ZM_DISABLE_IMAGE == 1 ]] && echo 插画用占位 || echo 真实插画))"
 else
   echo "[dev] 模型模式: 本地兜底 (未配置 DASHSCOPE_API_KEY)"
 fi

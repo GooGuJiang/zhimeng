@@ -112,3 +112,38 @@ def test_tts_legacy_model_name_still_works():
 
     data = run(ds.text_to_speech("夜色笼罩着外滩。", "Cherry", model="qwen-tts"))
     assert isinstance(data, (bytes, bytearray)) and len(data) > 1000
+
+
+def test_disable_image_switch_makes_no_remote_call(mm, monkeypatch):
+    """ZM_DISABLE_IMAGE=1（成本约束）：即使配置了 Key，illustrate / regenerate 也只返回占位 SVG（source=fallback），
+    不发任何图像请求、不做后台升级，且仍按 prompt 去重。假 Key、所有远程入口打桩为「一调用即失败」。"""
+    from app.config import get_settings
+    from app.multimodal import dashscope_api as ds
+
+    calls: list[str] = []
+
+    async def boom(*a, **k):
+        calls.append("remote")
+        raise AssertionError("remote image call while ZM_DISABLE_IMAGE=1")
+
+    for name in ("text_to_image", "create_image_task", "poll_task", "_request"):
+        monkeypatch.setattr(ds, name, boom)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "qa-dummy-not-a-real-key")
+    monkeypatch.setenv("ZM_FORCE_FALLBACK", "0")
+    monkeypatch.setenv("ZM_DISABLE_IMAGE", "1")
+    get_settings.cache_clear()
+    try:
+        s = get_settings()
+        assert s.llm_enabled and s.disable_image and not s.image_enabled
+        wid = "qa-disable-image"
+        a = run(mm.illustrate(wid, "民国上海外滩夜景，禁用生图"))
+        b = run(mm.illustrate(wid, "民国上海外滩夜景，禁用生图"))
+        assert a.source == "fallback" and a.url.split("?")[0].endswith(".svg"), a
+        assert b.id == a.id, "still deduped by prompt"
+        r = run(mm.regenerate(a.id))
+        assert r is not None and r.source == "fallback"
+        run(asyncio.sleep(0.5))  # 给可能的后台升级任务机会——不应发生
+        assert calls == [], calls
+        assert all(x.source == "fallback" for x in mm.list_assets(wid) if x.type == "image")
+    finally:
+        get_settings.cache_clear()

@@ -18,6 +18,9 @@ mkdir -p docs
   echo "- 提交: $(git rev-parse --short HEAD 2>/dev/null) ($(git log -1 --format=%s 2>/dev/null))"
 } > "$REPORT"
 
+# 控制成本：真实模型回归默认不调用图像生成（ZM_DISABLE_IMAGE=1，插画走占位）；可显式覆盖
+export ZM_DISABLE_IMAGE="${ZM_DISABLE_IMAGE:-1}"
+
 # 输出打码：任何形似密钥的串都替换掉
 mask() { sed -E 's/sk-[A-Za-z0-9_-]{8,}/sk-***/g'; }
 
