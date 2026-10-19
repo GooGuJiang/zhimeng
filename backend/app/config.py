@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     tts_voice: str = "Cherry"
 
     force_fallback: bool = False  # ZM_FORCE_FALLBACK=1 → never call remote APIs
+    # ZM_DISABLE_IMAGE=1 → 不真实调用生图（省费；插画一律走本地占位），配音/大模型不受影响
+    disable_image: bool = False
     llm_timeout: float = 60.0
     llm_retries: int = 1
 
@@ -57,6 +59,10 @@ class Settings(BaseSettings):
     @property
     def llm_enabled(self) -> bool:
         return bool(self.dashscope_api_key) and not self.force_fallback
+
+    @property
+    def image_enabled(self) -> bool:
+        return self.llm_enabled and not self.disable_image
 
     @property
     def assets_dir(self) -> Path:
@@ -80,6 +86,8 @@ def get_settings() -> Settings:
 
     if os.getenv("ZM_FORCE_FALLBACK", "").lower() in {"1", "true", "yes"}:
         s.force_fallback = True
+    if os.getenv("ZM_DISABLE_IMAGE", "").lower() in {"1", "true", "yes"}:
+        s.disable_image = True
     if os.getenv("ZM_DATA_DIR"):
         s.data_dir = Path(os.environ["ZM_DATA_DIR"])
     s.data_dir.mkdir(parents=True, exist_ok=True)
