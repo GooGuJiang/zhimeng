@@ -229,7 +229,8 @@ async def moderate(text: str, prompt: str, *, minor_mode: bool, kind: str, conte
     if task is not None and not task.done() and task.get_loop() is loop:
         STATS["dedup_joins"] += 1
     else:
-        fast = context in FAST_CONTEXTS or context == "output"
+        # latency-critical waiters skip instead of queueing; background reviews (longer timeout) may wait
+        fast = (context in FAST_CONTEXTS or context == "output") and timeout < TIMEOUT_SLOW
         if _active >= MAX_CONCURRENCY and fast:
             STATS["skipped_busy"] += 1
             return None

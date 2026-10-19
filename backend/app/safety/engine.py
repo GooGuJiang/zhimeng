@@ -14,9 +14,12 @@ Output text is only "blocked" for hard-block / LLM-block verdicts; otherwise ove
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.safety import keywords as kw
@@ -143,7 +146,7 @@ def _blocked(categories: list[str], rating: str, message: str) -> SafetyResult:
 
 
 async def check_input(text: str, *, minor_mode: bool = False, rating: str = "teen", context: str = "turn",
-                      use_llm: bool | None = None) -> SafetyResult:
+                      use_llm: bool | None = None, llm_timeout: float | None = None) -> SafetyResult:
     """Filter user input. ``rating`` = the world's rating ceiling; ``context`` ∈ CONTEXTS.
 
     ``blocked`` → caller stops (no commit). ``crisis`` → ``message`` contains hotlines.
@@ -176,7 +179,7 @@ async def check_input(text: str, *, minor_mode: bool = False, rating: str = "tee
         STATS["llm_used"] += 1
         kind = {"source_text": "课文/史料原文", "world_prompt": "世界设定描述", "inject": "上帝视角插入的事件",
                 "memory_query": "玩家提问"}.get(context, "玩家行动")
-        v = await llm_moderate(text, minor_mode, kind, context=context)
+        v = await llm_moderate(text, minor_mode, kind, context=context, timeout=llm_timeout)
         if v:
             categories = v["categories"]
             found_rating = _max_rating(found_rating, v["rating"])
@@ -199,7 +202,7 @@ async def check_input(text: str, *, minor_mode: bool = False, rating: str = "tee
 
 
 async def check_output(text: str, *, minor_mode: bool = False, rating: str = "teen",
-                       use_llm: bool | None = None) -> SafetyResult:
+                       use_llm: bool | None = None, llm_timeout: float | None = None) -> SafetyResult:
     """Filter generated narration / world JSON text. ``filtered_text`` is always set (what may be shown).
 
     ``blocked`` only for hard-block hits or an LLM "block" verdict; ``filtered_text`` is then a safe notice,
@@ -227,7 +230,7 @@ async def check_output(text: str, *, minor_mode: bool = False, rating: str = "te
         do_llm = use_llm
     if do_llm and len(text) >= LLM_MIN_CHARS:
         STATS["llm_used"] += 1
-        v = await llm_moderate(text, minor_mode, "AI生成的叙事文本", context="output")
+        v = await llm_moderate(text, minor_mode, "AI生成的叙事文本", context="output", timeout=llm_timeout)
         if v:
             categories = v["categories"]
             found_rating = _max_rating(found_rating, v["rating"])
@@ -262,6 +265,77 @@ def filter_chunk(text: str, *, minor_mode: bool = False) -> str:
         return text
 
 
+# ---- optional fast path: rules now, LLM review in the background (caller aborts/replaces on a hit) ----
+OnFlag = Callable[[SafetyResult], Any]
+_review_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_review(coro: Awaitable[SafetyResult], on_flag: OnFlag | None) -> asyncio.Task:
+    async def run() -> SafetyResult:
+        try:
+            r = await coro
+        except Exception as e:  # noqa: BLE001 - a failed review never breaks the caller
+            log.info("background review failed: %s", type(e).__name__)
+            return SafetyResult()
+        if on_flag is not None and (r.blocked or r.crisis):
+            try:
+                res = on_flag(r)
+                if inspect.isawaitable(res):
+                    await res
+            except Exception as e:  # noqa: BLE001
+                log.warning("on_flag callback failed: %s", type(e).__name__)
+        return r
+
+    t = asyncio.ensure_future(run())
+    _review_tasks.add(t)
+    t.add_done_callback(_review_tasks.discard)
+    return t
+
+
+async def check_input_fast(text: str, *, minor_mode: bool = False, rating: str = "teen", context: str = "turn",
+                           on_flag: OnFlag | None = None) -> tuple[SafetyResult, asyncio.Task | None]:
+    """Fast path for latency-critical callers (turn input): returns ``(rule_result, review)`` right away.
+
+    - Crisis / hard-block / injection / minor-mode / rating checks are ALWAYS done synchronously by the rule
+      layer — if ``rule_result.blocked`` the caller stops exactly like with ``check_input``; ``review`` is None.
+    - If the rule layer passes and triage finds the text suspicious, ``review`` is a background task resolving to
+      the full (rules + LLM) ``SafetyResult``; ``on_flag(result)`` (sync or async) is called when it comes back
+      ``blocked`` or ``crisis`` → the caller aborts the running stream / replaces the narration / does not commit.
+      Await ``review`` before committing if you want the strongest guarantee.
+    - Clean text, no key, or ZM_FORCE_FALLBACK=1 → ``review`` is None (nothing to wait for).
+    """
+    rule = await check_input(text, minor_mode=minor_mode, rating=rating, context=context, use_llm=False)
+    if rule.blocked or rule.crisis or not _llm_possible():
+        return rule, None
+    reasons = mod.triage(text or "", context=context, minor_mode=minor_mode, cap=ceiling(rating, minor_mode),
+                         keyword_rating=keyword_rating(text or ""))
+    if not reasons or not LLM_INPUT_MODERATION or len(kw.normalize(text or "")) < LLM_MIN_CHARS:
+        return rule, None
+    review = _spawn_review(check_input(text, minor_mode=minor_mode, rating=rating, context=context, use_llm=True,
+                                       llm_timeout=mod.TIMEOUT_SLOW), on_flag)
+    return rule, review
+
+
+def review_output(text: str, *, minor_mode: bool = False, rating: str = "teen", on_flag: OnFlag | None = None,
+                  force: bool = False) -> asyncio.Task | None:
+    """Background LLM review of generated text (after/while it is shown). Returns None when nothing to review
+    (clean by triage unless ``force``, or no key). ``on_flag`` fires on ``blocked`` → caller replaces the stored
+    narration with ``result.filtered_text`` (a safe notice). Rule-layer masking must still go through
+    ``check_output(use_llm=False)`` / ``filter_chunk`` synchronously."""
+    if not _llm_possible():
+        return None
+    if not force and not mod.triage(text or "", context="output", minor_mode=minor_mode,
+                                    cap=ceiling(rating, minor_mode), keyword_rating=keyword_rating(text or "")):
+        return None
+    return _spawn_review(check_output(text, minor_mode=minor_mode, rating=rating, use_llm=True,
+                                      llm_timeout=mod.TIMEOUT_SLOW), on_flag)
+
+
+def _llm_possible() -> bool:
+    from app.config import get_settings
+    return get_settings().llm_enabled
+
+
 async def check(text: str, minor_mode: bool = False) -> SafetyResult:
     """POST /api/safety/check — same as the input filter."""
     return await check_input(text, minor_mode=minor_mode)
@@ -286,7 +360,12 @@ def policy() -> dict[str, Any]:
         "output_filter": ["违规关键词拦截", "大模型审核", "超出分级词汇遮蔽", "流式输出实时遮蔽", "AI生成标识"],
         "crisis_message": CRISIS_MESSAGE,
         "hotlines": HOTLINES,
-        "moderation": {**mod.describe(), "output_mode": OUTPUT_MODE, "input_llm_enabled": LLM_INPUT_MODERATION},
+        "moderation": {**mod.describe(), "output_mode": OUTPUT_MODE, "input_llm_enabled": LLM_INPUT_MODERATION,
+                       "sync_rule_layer": "危机（自伤/自杀）、违规硬拦截、提示词注入、未成年人禁用词、分级上限一律由规则层同步处理，不走任何捷径",
+                       "fast_path": {"check_input_fast": "先返回规则层结果，可疑输入的大模型复核在后台进行；复核命中 blocked/crisis 时回调 on_flag，"
+                                                         "由调用方中止流式输出 / 替换叙事 / 不提交",
+                                     "review_output": "生成文本的后台大模型复核，命中时回调 on_flag 替换已存叙事",
+                                     "review_timeout_s": mod.TIMEOUT_SLOW}},
         "report": {"endpoint": "/api/reports", "description": "对任意生成内容可一键举报，人工复核"},
         "ai_label": AI_LABEL,
         "safety_label": SAFETY_LABEL,

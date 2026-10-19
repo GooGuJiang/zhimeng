@@ -33,6 +33,14 @@ CRISIS_MESSAGE: str
 LLM moderation: use `app.llm.client.chat_json(..., model=get_settings().fast_model)` (returns None without key → keyword only).
 Reports (`POST /api/reports`) are stored by backend core in table `reports` (`app/db.py: ReportRow`).
 
+#### 审核提速取舍（safety 同学，2026-10-19，用户已确认）
+- **目标与平衡**：真实模式回合首字 ≤2s；一次 qwen-turbo 审核实测 1.1–3.9s，而且会加重 429 限流。因此不再逐条调大模型，改为“规则层兜底 + 可疑才调 LLM”。
+- **规则层同步、不走捷径**：危机（自伤/自杀，返回热线）、违规硬拦截（关键词 + 正则）、提示词注入/越狱、未成年人禁用词、分级上限，全部在规则层同步判定，任何模式都不跳过。
+- **可疑才调 LLM**：`turn` / `memory_query` / 生成文本中，规则层干净、文本短、没有可疑特征的直接放行。灰区词、疑似注入、变形混淆、链接/联系方式、长文本、危机暗示、超分级、未成年人敏感话题才调用 LLM。`world_prompt` / `source_text` / `inject` 调用频率低，始终调用 LLM。
+- **严格时限**：turn/memory_query 1.5s，output 3s，低频场景 5s；超时按规则层结果处理，后台调用继续执行并写入缓存。
+- **应对 429**：结果缓存（LRU + TTL 900s，key = sha256(minor_mode|kind|text)），同文本并发合并为一次调用，全局并发上限 2，调用间隔 ≥0.2s。高频场景在饱和时跳过 LLM、不排队；遇到 429 指数退避（5s→…≤120s），退避期间只走规则层。
+- **可选并行快速路径**：`check_input_fast(...) -> (rule_result, review_task|None)` 先返回规则层结果，LLM 复核在后台运行；复核结果为 blocked/crisis 时回调 `on_flag`，由调用方中止流式输出、替换叙事或不提交。生成文本可用 `review_output(...)` 做后台复核。当前策略可在 `GET /api/safety/policy` 的 `moderation` 字段查看。
+
 ### `app.multimodal`
 ```python
 async def illustrate(world_id: str, prompt: str, *, turn_id: str | None = None, style: str | None = None, force: bool = False) -> Asset
