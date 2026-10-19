@@ -240,6 +240,9 @@ export interface EducationSummary {
   quiz: { question: string; options: string[]; answer_index: number; explanation: string }[];
   reflection: string;
   ai_label: string;
+  /** v1.2 (BUG-007) */
+  source?: "llm" | "fallback";
+  status?: "complete" | "pending";
 }
 export interface Poster {
   title: string;

@@ -90,6 +90,8 @@ export function EduSummaryView({ s }: { s: EducationSummary }) {
   );
 }
 
+const MAX_POLLS = 6; // ≈ 3 + 4.5 + 6.8 + 10 + 12 + 12 s ≈ 48 s
+
 const SUMMARY_STAGES = ["recall", "points", "quiz", "reflect"];
 const SUMMARY_STEPS: Record<string, string> = {
   recall: "回顾你走过的旅程",
@@ -106,14 +108,33 @@ export function EduSummaryDialog({ worldId, onClose }: { worldId: string; onClos
   const [elapsed, setElapsed] = useState(0);
   const loading = !s && !err;
 
+  // v1.2: the endpoint answers within ~8 s; if the LLM version isn't ready it returns the local summary
+  // with status:"pending" — show that right away and re-request with backoff (capped) for "complete".
+  const [polls, setPolls] = useState<"idle" | "polling" | "gave-up">("idle");
   useEffect(() => {
     let live = true;
-    api
-      .eduSummary(worldId)
-      .then((r) => live && setS(r))
-      .catch((e) => live && setErr(errorText(e)));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let n = 0;
+    const load = (first: boolean) =>
+      api
+        .eduSummary(worldId)
+        .then((r) => {
+          if (!live) return;
+          setS(r);
+          if (r.status !== "pending") return setPolls("idle");
+          if (++n > MAX_POLLS) return setPolls("gave-up");
+          setPolls("polling");
+          timer = setTimeout(() => void load(false), Math.min(12_000, 3000 * 1.5 ** (n - 1)));
+        })
+        .catch((e) => {
+          if (!live) return;
+          if (first) setErr(errorText(e));
+          else setPolls("gave-up"); // keep the local version on screen
+        });
+    void load(true);
     return () => {
       live = false;
+      if (timer) clearTimeout(timer);
     };
   }, [worldId, attempt]);
 
@@ -126,6 +147,7 @@ export function EduSummaryDialog({ worldId, onClose }: { worldId: string; onClos
 
   const retry = () => {
     setErr(null);
+    setPolls("idle");
     setElapsed(0);
     setAttempt((a) => a + 1);
   };
@@ -134,7 +156,35 @@ export function EduSummaryDialog({ worldId, onClose }: { worldId: string; onClos
   return (
     <Dialog title="学习小结" onClose={onClose} wide>
       {s ? (
-        <EduSummaryView s={s} />
+        <>
+          {s.status === "pending" ? (
+            <div
+              className="notice row"
+              data-testid="edu-summary-pending"
+              aria-live="polite"
+              style={{ marginBottom: 12, fontSize: 13 }}
+            >
+              {polls === "gave-up" ? (
+                <>
+                  <span style={{ flex: 1 }}>当前为本地整理版，AI 精修版暂未就绪。</span>
+                  <button type="button" className="btn sm ghost" onClick={retry}>
+                    再试一次
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="dots" aria-hidden>
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <span>先为你呈现本地整理版，AI 精修版生成中，完成后自动替换…</span>
+                </>
+              )}
+            </div>
+          ) : null}
+          <EduSummaryView key={s.status ?? "x"} s={s} />
+        </>
       ) : err ? (
         <div className="notice warn stack" role="alert" data-testid="edu-summary-error">
           <strong>学习小结暂时没能生成</strong>

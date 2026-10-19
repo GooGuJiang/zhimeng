@@ -112,6 +112,7 @@ export function usePlay(worldId: string) {
         if (op.status === "fulfilled") setOptions(op.value.options ?? []);
         else if (ts.status === "fulfilled" && ts.value.length)
           setOptions(ts.value[ts.value.length - 1].options ?? []);
+        else if (w.opening_options?.length) setOptions(w.opening_options); // v1.2 turn-0 options
         await refreshSide();
         const p = store.getPending(worldId);
         if (p) {

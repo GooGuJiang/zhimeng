@@ -186,9 +186,16 @@ export const api = {
     ),
   /** v1.2: world-scoped list (GET without world_id is admin-only → 403 forbidden). */
   reports: (worldId: string) =>
-    request<{ id: string; world_id?: string; reason?: string; status?: string; created_at?: string; priority?: string }[]>(
-      `/reports?world_id=${encodeURIComponent(worldId)}`,
-    ),
+    request<
+      {
+        id: string;
+        world_id?: string;
+        reason?: string;
+        status?: string;
+        created_at?: string;
+        priority?: string;
+      }[]
+    >(`/reports?world_id=${encodeURIComponent(worldId)}`),
   report: (body: { world_id?: string; turn_id?: string; content: string; reason: string }) =>
     request<{ id: string; status: string; created_at: string; priority?: "high" | "normal" }>("/reports", {
       method: "POST",

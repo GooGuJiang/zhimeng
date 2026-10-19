@@ -8,7 +8,16 @@ import { useCallback, useRef, useState } from "react";
 import { streamSSE } from "@/lib/sse";
 import type { Progress, SafetyResult, World } from "@/lib/types";
 
-export const GEN_STAGES = ["safety", "outline", "locations", "characters", "conflict", "persist", "memory", "done"];
+export const GEN_STAGES = [
+  "safety",
+  "outline",
+  "locations",
+  "characters",
+  "conflict",
+  "persist",
+  "memory",
+  "done",
+];
 
 export interface GenState {
   running: boolean;
