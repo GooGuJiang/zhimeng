@@ -1,0 +1,380 @@
+"""Unit tests for app.multimodal. Fallback mode makes zero remote calls; the DashScope paths are exercised
+with httpx.MockTransport (no real network)."""
+from __future__ import annotations
+
+import asyncio
+import base64
+import inspect
+import json
+import logging
+import struct
+import wave
+import zlib
+from io import BytesIO
+
+import httpx
+import pytest
+
+from app import multimodal
+from zm_unit_helpers import FAKE_KEY, install_transport
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def _file(env, asset):
+    assert asset.url.startswith("/api/static/assets/")
+    return env.assets_dir / asset.url.rsplit("/", 1)[1]
+
+
+def _png() -> bytes:
+    ihdr = b"IHDR" + struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + ihdr + struct.pack(">I", zlib.crc32(ihdr))
+            + struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND")))
+
+
+def _wav() -> bytes:
+    buf = BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(24000), w.writeframes(b"\x01\x00" * 2400)
+    return buf.getvalue()
+
+
+# ---------- contract ----------
+def test_signatures_match_team_md():
+    p = inspect.signature(multimodal.illustrate).parameters
+    assert list(p)[:5] == ["world_id", "prompt", "turn_id", "style", "force"]
+    p = inspect.signature(multimodal.speak).parameters
+    assert list(p)[:5] == ["world_id", "text", "voice", "turn_id", "force"]
+    assert inspect.iscoroutinefunction(multimodal.regenerate)
+    assert not inspect.iscoroutinefunction(multimodal.list_assets)
+
+
+# ---------- fallback mode (ZM_FORCE_FALLBACK=1) ----------
+def test_fallback_zero_remote_calls(env, monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("no network in fallback mode")
+
+    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    img = run(multimodal.illustrate("w1", "民国上海外滩夜景，报社记者", turn_id="t1"))
+    assert img.type == "image" and img.source == "fallback" and img.turn_id == "t1"
+    svg = _file(env, img).read_bytes()
+    assert svg.startswith(b"<svg") and "内容由AI生成".encode() in svg
+    aud = run(multimodal.speak("w1", "夜色笼罩着外滩。"))
+    assert aud.type == "audio" and aud.source == "fallback" and aud.prompt == "夜色笼罩着外滩。"
+    with wave.open(str(_file(env, aud))) as w:
+        assert w.getnframes() > 0
+
+
+def test_fallback_cache_and_regenerate(env):
+    a = run(multimodal.illustrate("w1", "外滩夜景"))
+    b = run(multimodal.illustrate("w1", "外滩夜景"))
+    assert a.id == b.id, "cached by prompt"
+    c = run(multimodal.illustrate("w1", "外滩夜景", force=True))
+    assert c.id != a.id and c.url != a.url, "force bypasses cache with a new file"
+    r = run(multimodal.regenerate(a.id))
+    assert r and r.id != a.id and r.url != a.url and r.type == "image" and r.prompt == a.prompt
+    t1 = run(multimodal.speak("w1", "你好"))
+    assert run(multimodal.speak("w1", "你好")).id == t1.id
+    t2 = run(multimodal.regenerate(t1.id))
+    assert t2 and t2.type == "audio" and t2.id != t1.id and t2.prompt == t1.prompt
+    assert run(multimodal.regenerate("ast_missing")) is None
+    ids = [x.id for x in multimodal.list_assets("w1")]
+    assert set(ids) >= {a.id, c.id, r.id, t1.id, t2.id} and multimodal.list_assets("other") == []
+
+
+def test_style_changes_cache_key(env):
+    a = run(multimodal.illustrate("w1", "外滩", style="水墨"))
+    b = run(multimodal.illustrate("w1", "外滩", style="油画"))
+    assert a.id != b.id
+
+
+def test_prompt_sanitized(env):
+    a = run(multimodal.illustrate("w1", "血腥的码头，尸块"))
+    assert "血腥" not in a.prompt and "尸块" not in a.prompt
+
+
+def test_voice_casting():
+    from app.multimodal import voices
+
+    assert voices.voice_for(None) == voices.NARRATOR_VOICE == voices.voice_for("narrator")
+    a = voices.voice_for({"name": "阿四", "role": "码头线人，男"})
+    assert a == voices.voice_for({"name": "阿四", "role": "码头线人，男"}), "stable by name"
+    assert a != voices.NARRATOR_VOICE
+    female, male = voices.pools()
+    assert a in male
+    assert voices.voice_for({"name": "白玫瑰", "role": "歌女"}) in female
+    assert voices.voice_for("Ethan") == "Ethan"
+    f3, m3 = voices.pools("qwen3-tts-flash")
+    assert "Cherry" in f3 and "Ethan" in m3 and len(m3) > 1
+    assert voices.pools("qwen-tts") == voices.pools("qwen3-tts-flash"), "qwen-tts is aliased (BUG-002)"
+
+
+def test_key_scene_helpers(env):
+    assert multimodal.is_key_scene(1) and not multimodal.is_key_scene(3, [])
+    assert multimodal.is_key_scene(3, [{"type": "injected"}])
+    p = multimodal.build_scene_prompt({"era": "民国", "genre": "侦探"}, "雨夜的外滩", "外滩", minor_mode=True)
+    assert "民国" in p and "外滩" in p and len(p) <= 500
+    res = run(multimodal.key_scene_assets({"id": "w2"}, "雨夜的外滩。", turn_id="t1"))
+    assert [a.type for a in res] == ["image"], "auto audio is skipped (not a silent placeholder) without TTS"
+
+
+# ---------- remote path (mocked DashScope) ----------
+def _dashscope_handler(state):
+    def handler(req: httpx.Request) -> httpx.Response:
+        u = str(req.url)
+        if u.endswith("/services/aigc/text2image/image-synthesis"):
+            state["create"] = json.loads(req.content)
+            state["create_headers"] = dict(req.headers)
+            return httpx.Response(200, json={"output": {"task_id": "task-1", "task_status": "PENDING"}})
+        if u.endswith("/tasks/task-1"):
+            state["polls"] = state.get("polls", 0) + 1
+            if state["polls"] < 2:
+                return httpx.Response(200, json={"output": {"task_id": "task-1", "task_status": "RUNNING"}})
+            return httpx.Response(200, json={"output": {"task_status": "SUCCEEDED",
+                                                        "results": [{"url": "https://oss.example/img.png"}]}})
+        if u == "https://oss.example/img.png":
+            assert "authorization" not in {k.lower() for k in req.headers}, "key must not leak to OSS"
+            return httpx.Response(200, content=_png())
+        if u.endswith("/services/aigc/multimodal-generation/generation"):
+            state["tts"] = json.loads(req.content)
+            return httpx.Response(200, json={"output": {"audio": {"url": "https://oss.example/a.wav"}}})
+        if u == "https://oss.example/a.wav":
+            return httpx.Response(200, content=_wav())
+        return httpx.Response(404, json={"code": "NotFound"})
+    return handler
+
+
+def test_remote_image_async_task(remote, monkeypatch):
+    state: dict = {}
+    seen = install_transport(monkeypatch, _dashscope_handler(state))
+    a = run(multimodal.illustrate("w1", "外滩夜景，报社记者"))
+    assert a.source == "dashscope"
+    assert state["create_headers"]["x-dashscope-async"] == "enable"
+    assert state["create_headers"]["authorization"] == f"Bearer {FAKE_KEY}"
+    assert state["create"]["model"] == remote.image_model and state["create"]["parameters"]["n"] == 1
+    assert state["polls"] == 2
+    data = _file(remote, a).read_bytes()
+    assert data.startswith(b"\x89PNG") and b"AIGC" in data, "implicit AI label embedded"
+    n = len(seen)
+    b = run(multimodal.illustrate("w1", "外滩夜景，报社记者"))
+    assert b.id == a.id and len(seen) == n, "cache hit → no new remote call"
+    c = run(multimodal.illustrate("w9", "外滩夜景，报社记者"))
+    assert c.world_id == "w9" and c.url == a.url and len(seen) == n, "cross-world reuse without re-billing"
+    r = run(multimodal.regenerate(a.id))
+    assert r.source == "dashscope" and r.url != a.url and len(seen) > n
+
+
+def test_remote_tts(remote, monkeypatch):
+    state: dict = {}
+    install_transport(monkeypatch, _dashscope_handler(state))
+    a = run(multimodal.speak("w1", "夜色笼罩着外滩。", voice="Ethan"))
+    assert a.source == "dashscope" and state["tts"]["model"] == "qwen3-tts-flash"
+    assert state["tts"]["input"] == {"text": "夜色笼罩着外滩。", "voice": "Ethan", "language_type": "Chinese"}
+    assert _file(remote, a).read_bytes().startswith(b"RIFF")
+    r = run(multimodal.regenerate(a.id))
+    assert r.source == "dashscope" and state["tts"]["input"]["voice"] == "Ethan", "regenerate keeps the voice"
+    # NPC by name → stable non-narrator voice
+    run(multimodal.speak("w1", "跟我来。", voice="阿四"))
+    assert state["tts"]["input"]["voice"] != multimodal.NARRATOR_VOICE
+
+
+def test_remote_tts_base64(remote, monkeypatch):
+    raw = _wav()
+
+    def handler(req):
+        return httpx.Response(200, json={"output": {"audio": {"data": base64.b64encode(raw).decode()}}})
+
+    install_transport(monkeypatch, handler)
+    a = run(multimodal.speak("w1", "测试"))
+    assert a.source == "dashscope" and _file(remote, a).read_bytes() == raw
+
+
+@pytest.mark.parametrize("failure", ["http500", "task_failed", "inspection", "exception", "no_url"])
+def test_remote_failures_fall_back_and_never_leak_key(remote, monkeypatch, caplog, failure):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if failure == "http500":
+            return httpx.Response(500, json={"code": "InternalError", "message": f"oops {FAKE_KEY}"})
+        if failure == "exception":
+            raise httpx.ConnectError("boom")
+        if failure == "inspection":
+            return httpx.Response(400, json={"code": "DataInspectionFailed", "message": "bad"})
+        if str(req.url).endswith("image-synthesis"):
+            return httpx.Response(200, json={"output": {"task_id": "task-1"}})
+        if failure == "no_url":
+            return httpx.Response(200, json={"output": {"task_status": "SUCCEEDED", "results": []}})
+        return httpx.Response(200, json={"output": {"task_status": "FAILED", "code": "X", "message": "m"}})
+
+    install_transport(monkeypatch, handler)
+    caplog.set_level(logging.DEBUG)
+    img = run(multimodal.illustrate("w1", "外滩"))
+    aud = run(multimodal.speak("w1", "外滩"))
+    assert img.source == "fallback" and _file(remote, img).exists()
+    assert aud.source == "fallback" and _file(remote, aud).exists()
+    assert FAKE_KEY not in caplog.text
+    # within RETRY_AFTER the failing prompt is not re-sent (no hammering a broken API)
+    from app.multimodal import assets
+
+    seen = install_transport(monkeypatch, _dashscope_handler({}))
+    again = run(multimodal.illustrate("w1", "外滩"))
+    assert again.id == img.id and not seen
+    # after the cool-down the placeholder row is retried and upgraded in place (BUG-005)
+    assets._recent_fail.clear()
+    up = run(multimodal.illustrate("w1", "外滩"))
+    assert up.id == img.id and up.source == "dashscope" and up.url != img.url
+
+
+def test_poll_timeout(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    monkeypatch.setattr(ds, "POLL_TIMEOUT", 0.0)
+
+    def handler(req):
+        if str(req.url).endswith("image-synthesis"):
+            return httpx.Response(200, json={"output": {"task_id": "task-1"}})
+        return httpx.Response(200, json={"output": {"task_status": "RUNNING"}})
+
+    install_transport(monkeypatch, handler)
+    assert run(multimodal.illustrate("w1", "外滩")).source == "fallback"
+
+
+def test_redact(remote):
+    from app.multimodal import dashscope_api as ds
+
+    assert FAKE_KEY not in ds.redact(f"Bearer {FAKE_KEY}")
+    assert "sk-***" in ds.redact("token sk-abcdefghijklmnop")
+    assert FAKE_KEY not in str(ds.DashScopeError("X", f"msg {FAKE_KEY}"))
+
+
+def test_db_failure_never_raises(env, monkeypatch):
+    from app.multimodal import assets
+
+    def broken(*a, **kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(assets, "_save", broken)
+    a = run(multimodal.illustrate("w1", "外滩"))
+    b = run(multimodal.speak("w1", "外滩"))
+    assert a.source == b.source == "fallback" and a.type == "image" and b.type == "audio"
+
+
+# ---------- regression: BUG-005 (fallback assets must be cached per cache_key, upgraded in place) ----------
+def _rows(world_id):
+    from sqlmodel import select
+
+    from app.db import AssetRow, session_scope
+    with session_scope() as s:
+        return s.exec(select(AssetRow).where(AssetRow.world_id == world_id)).all()
+
+
+def test_bug005_fallback_illustrate_and_speak_are_cached(env):
+    a = [run(multimodal.illustrate("w5", "民国上海外滩夜景")) for _ in range(3)]
+    t = [run(multimodal.speak("w5", "夜色笼罩着外滩。")) for _ in range(3)]
+    assert len({x.id for x in a}) == 1 and len({x.id for x in t}) == 1
+    assert len(_rows("w5")) == 2, "no row growth for repeated identical requests"
+    assert len(multimodal.list_assets("w5")) == 2
+
+
+def test_bug005_fallback_row_upgraded_when_key_available(env, monkeypatch):
+    img = run(multimodal.illustrate("w5", "外滩"))
+    aud = run(multimodal.speak("w5", "外滩"))
+    assert img.source == aud.source == "fallback"
+    # a key becomes available → same rows are upgraded in place, no new rows
+    env.dashscope_api_key = FAKE_KEY
+    env.force_fallback = False
+    from app.multimodal import dashscope_api as ds
+    monkeypatch.setattr(ds, "POLL_INTERVAL", 0.0)
+    install_transport(monkeypatch, _dashscope_handler({}))
+    img2 = run(multimodal.illustrate("w5", "外滩"))
+    aud2 = run(multimodal.speak("w5", "外滩"))
+    assert (img2.id, img2.source) == (img.id, "dashscope") and img2.url != img.url
+    assert (aud2.id, aud2.source) == (aud.id, "dashscope") and aud2.url != aud.url
+    assert len(_rows("w5")) == 2
+    assert run(multimodal.illustrate("w5", "外滩")).id == img.id  # now a real cache hit
+
+
+# ---------- regression: BUG-002 (qwen-tts → qwen3-tts-flash) ----------
+def test_bug002_qwen_tts_is_mapped(remote, monkeypatch):
+    state: dict = {}
+    install_transport(monkeypatch, _dashscope_handler(state))
+    remote.tts_model = "qwen-tts"
+    a = run(multimodal.speak("w1", "你好。", voice="Cherry"))
+    assert a.source == "dashscope" and state["tts"]["model"] == "qwen3-tts-flash"
+
+
+def test_bug002_model_not_exist_retries_with_qwen3(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    remote.tts_model = "qwen-tts-old-custom"
+    models: list[str] = []
+
+    def handler(req):
+        u = str(req.url)
+        if u.endswith("/multimodal-generation/generation"):
+            m = json.loads(req.content)["model"]
+            models.append(m)
+            if m != "qwen3-tts-flash":
+                return httpx.Response(404, json={"code": "InvalidParameter", "message": "Model not exist."})
+            return httpx.Response(200, json={"output": {"audio": {"url": "https://oss.example/a.wav"}}})
+        return httpx.Response(200, content=_wav())
+
+    install_transport(monkeypatch, handler)
+    a = run(multimodal.speak("w1", "你好。"))
+    assert a.source == "dashscope" and models == ["qwen-tts-old-custom", "qwen3-tts-flash"]
+    assert ds.effective_tts_model() == "qwen3-tts-flash"  # sticky: later calls skip the dead model
+    run(multimodal.speak("w1", "再见。"))
+    assert models[-1] == "qwen3-tts-flash" and len(models) == 3
+
+
+def test_connect_errors_are_retried(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    monkeypatch.setattr(ds.asyncio, "sleep", _nosleep)
+    n = {"c": 0}
+    base = _dashscope_handler({})
+
+    def handler(req):
+        if str(req.url).endswith("/multimodal-generation/generation") and n["c"] < 2:
+            n["c"] += 1
+            raise httpx.ConnectTimeout("")
+        return base(req)
+
+    install_transport(monkeypatch, handler)
+    assert run(multimodal.speak("w1", "重试测试。")).source == "dashscope" and n["c"] == 2
+
+
+async def _nosleep(*a, **kw):
+    return None
+
+
+def test_http_result_url_upgraded_to_https(remote, monkeypatch):
+    """TTS returns http:// OSS URLs; port 80 is often blocked → download via https first."""
+    got: list[str] = []
+
+    def handler(req):
+        u = str(req.url)
+        if u.endswith("/multimodal-generation/generation"):
+            return httpx.Response(200, json={"output": {"audio": {
+                "url": "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/x.wav?Expires=1&Signature=s"}}})
+        got.append(u)
+        assert "authorization" not in {k.lower() for k in req.headers}
+        return httpx.Response(200, content=_wav())
+
+    install_transport(monkeypatch, handler)
+    assert run(multimodal.speak("w1", "外滩。")).source == "dashscope"
+    assert got == ["https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/x.wav?Expires=1&Signature=s"]
+
+
+def test_fix_wav_header():
+    from app.multimodal.fallback import fix_wav_header
+
+    good = _wav()
+    bad = bytearray(good)
+    bad[4:8] = struct.pack("<I", 0xFFFFFFFF)
+    bad[40:44] = struct.pack("<I", 0xFFFFFFFF)
+    fixed = fix_wav_header(bytes(bad))
+    assert fixed == good
+    with wave.open(BytesIO(fixed)) as w:
+        assert w.getnframes() == 2400
+    assert fix_wav_header(b"junk") == b"junk"
