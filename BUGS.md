@@ -10,8 +10,8 @@ Owner：`backend`（核心）、`frontend`、`safety-mm`（安全+多模态）�
 | BUG-003 | VERIFIED | frontend | 首页 `GET /` 返回 500：`src/app/page.tsx` 仍是模板且 import 已删除的 `./page.module.css` |
 | BUG-004 | VERIFIED | backend | API.md 写静态资源路径为 `/static/assets/<file>`，而 TEAM.md 与 `app/multimodal/assets.py` 实际为 `/api/static/assets/<file>` |
 | BUG-005 | VERIFIED | safety-mm | 兜底模式下同一 prompt 多次 `illustrate()` 每次都新建一条 asset 行（文件复用），与 API.md「按 prompt hash 缓存」不一致，资产列表会膨胀 |
-| BUG-007 | OPEN | frontend（+backend 时延） | 真实模型模式「学习小结」弹窗显示 `Internal Server Error`：`/education/summary` 耗时 >30s，Next 代理 `socket hang up`(ECONNRESET) |
-| BUG-006 | OPEN | backend | 真实模型模式下 LLM 限流(429)/流中断时回合直接失败（`error` / 前端「本回合生成失败（LLMUnavailable）」），未自动降级到本地兜底模板 |
+| BUG-007 | FIXED(待复测，后端部分) | frontend（+backend 时延） | 真实模型模式「学习小结」弹窗显示 `Internal Server Error`：`/education/summary` 耗时 >30s，Next 代理 `socket hang up`(ECONNRESET) |
+| BUG-006 | FIXED(待复测) | backend | 真实模型模式下 LLM 限流(429)/流中断时回合直接失败（`error` / 前端「本回合生成失败（LLMUnavailable）」），未自动降级到本地兜底模板 |
 
 ### BUG-001 后端入口缺失（阻塞全部 API / E2E）
 - 复现：`scripts/qa.sh api` 或 `scripts/dev.sh --fallback`（2026-10-19 14:55 CST，HEAD 17a1cfa + 工作区）
@@ -53,6 +53,9 @@ Owner：`backend`（核心）、`frontend`、`safety-mm`（安全+多模态）�
 - 期望：plan.md 异常流程「模型超时/失败 → 提示重试**并提供本地兜底模板**」、非功能「单次生成失败自动重试 ≥1 次且不丢进度」：
   流式中断/限流时服务端至少自动重试一次，仍失败则用兜底模板完成本回合（`source=fallback`），而不是让回合失败
 - 备注：同一个 Key 同时被多个代理/测试使用，限流更容易触发；QA 测试已按 API.md 在 `error` 时由客户端重发/点「重试」，并在报告中记录重试次数
+- 修复：提交 c066acf（+ fdf6410 断流续写）。模型链全部失败 → 本地模板完成并提交（`done.turn.source="fallback"`）；已出 token 后断流先续写，续写用尽 →
+  `progress{stage:"fallback",reset:true}` 后整段兜底重写（以 `done.turn.narration` 为准）；NPC/世界 Agent/记忆问答/章节摘要/抽取同样本地兜底。
+  单测：backend/tests/core/test_bug006_007.py（模拟全链 429、首字后断流）
 
 
 ### BUG-007 真实模型学习小结经代理超时
@@ -61,3 +64,6 @@ Owner：`backend`（核心）、`frontend`、`safety-mm`（安全+多模态）�
   事后直接 `curl :8000/.../education/summary` → 200，耗时 19s（含 LLM），返回完整小结
 - 期望：小结在真实模型下可用。前端：提高 Next rewrite 代理超时（如 `experimental.proxyTimeout`）或直连后端，错误时给出友好提示+重试而非原样显示 `Internal Server Error`；
   后端：小结结果按世界+回合缓存、LLM 超时后用兜底模板生成，保证 <30s
+- 修复（后端）：提交 c066acf。`/education/summary` 最多约 8s 返回：LLM 版（快速模型+短输入）在后台任务生成并按世界+回合缓存，未就绪时先返回本地小结
+  `status:"pending", source:"fallback"`，再 GET 得 `status:"complete"`（字段向后兼容）。非流式 LLM 调用统一 8s 总时限（SYNC_LLM_TIMEOUT_S），
+  安全审核 6s 时限后走规则层。真实 Key 实测：首次 8.0s pending/fallback，约 10s 后 3.6s complete/llm。前端代理超时/友好提示属前端
