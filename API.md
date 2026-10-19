@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:8000` · all routes prefixed with `/api` · CORS allows `http://localhost:3000` (and 127.0.0.1:3000).
 JSON everywhere (UTF-8). Errors: HTTP 4xx/5xx with `{"detail": "...", "code": "..."}`.
-Static generated assets: `GET /static/assets/<file>` (relative `url` fields below start with `/static/...`; prefix with base URL).
+Static generated assets: `GET /api/static/assets/<file>` (relative `url` fields below start with `/api/static/assets/...`; prefix with base URL or use the Next `/api/*` proxy). `/static/assets/<file>` is kept as a deprecated alias.
 
 Every AI-generated payload carries `"ai_generated": true` and the label `"ai_label": "内容由AI生成"` (F9).
 
@@ -58,7 +58,7 @@ type Citation = { fact_id: string; content: string; turn: number; chapter: numbe
 type Turn = { id: string; world_id: string; index: number; chapter: number; action: string; narration: string;
               options: Option[]; events: WorldEvent[]; facts: string[]; asset_ids: string[]; key_scene: boolean;
               created_at: string; ai_generated: true; ai_label: string }
-type Asset = { id: string; world_id: string; type: "image"|"audio"; url: string; turn_id: string|null;
+type Asset = { id: string; world_id: string; type: "image"|"audio"; url: string /* /api/static/assets/<file> */; turn_id: string|null;
                prompt: string; source: "dashscope"|"fallback"; created_at: string }
 type SafetyResult = { allowed: boolean; blocked: boolean; crisis: boolean; categories: string[]; rating: Rating;
                       message: string | null; /* user-facing message, e.g. crisis hotline */ filtered_text?: string }
