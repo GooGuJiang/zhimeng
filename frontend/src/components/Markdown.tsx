@@ -36,11 +36,22 @@ const linkSafe = (url: string) => {
 };
 
 const components: Components = {
-  a: ({ href, children }) => (
-    <a href={href || undefined} target="_blank" rel="noopener noreferrer nofollow">
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => {
+    const cite = href?.match(/^#zm-cite-(\d+)$/);
+    if (cite)
+      return (
+        <sup className="cite-ref">
+          <a href={href} data-cite={cite[1]} aria-label={`查看出处 ${cite[1]}`}>
+            {children}
+          </a>
+        </sup>
+      );
+    return (
+      <a href={href || undefined} target="_blank" rel="noopener noreferrer nofollow">
+        {children}
+      </a>
+    );
+  },
   table: ({ children }) => (
     <div className="md-table">
       <table>{children}</table>

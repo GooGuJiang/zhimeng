@@ -11,7 +11,7 @@ import { createParser, Renderer, type ActionEvent } from "@openuidev/react-lang"
 import { library } from "@/openui/library";
 import { compileComponent, programFor } from "@/openui/compile";
 import type { UIComponent } from "@/lib/types";
-import { AiLabel } from "./AiLabel";
+import { AiLabel, SHOW_AI_LABEL } from "./AiLabel";
 
 export interface GenUIHandlers {
   act?: (text: string) => void;
@@ -144,12 +144,14 @@ export function GenUIPanel({
         <h3 className="h2" style={{ fontSize: 16 }}>
           {c.title}
         </h3>
-        <span
-          className="genui-src"
-          title={authored ? "由 UI 智能体编写的 OpenUI 程序" : "依剧情数据编译的 OpenUI 程序"}
-        >
-          {source === "local" ? "本地生成" : authored ? "AI 编排" : "AI 数据"}
-        </span>
+        {SHOW_AI_LABEL ? (
+          <span
+            className="genui-src"
+            title={authored ? "由 UI 智能体编写的 OpenUI 程序" : "依剧情数据编译的 OpenUI 程序"}
+          >
+            {source === "local" ? "本地生成" : authored ? "AI 编排" : "AI 数据"}
+          </span>
+        ) : null}
         {source === "ai" ? <AiLabel text={c.ai_label} testId="ai-label-ui" /> : null}
       </div>
       <OpenUIBlock

@@ -2,6 +2,7 @@
  * F8 结局短视频: renders an animated ending card on a <canvas> and records it with MediaRecorder
  * (WebM). Pure client-side, no upload. AI + safety labels are burned into every frame.
  */
+import { SHOW_AI_LABEL } from "@/components/AiLabel";
 import type { Poster } from "./types";
 
 function wrap(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
@@ -134,7 +135,9 @@ export async function recordEndingVideo(p: Poster, imageSrc: string | null, seco
     );
     ctx.fillStyle = "rgba(246,239,226,0.85)";
     ctx.fillText(
-      `${p.ai_label || "内容由AI生成"} · ${p.safety_label || "已通过内容安全审核"} · 分级 ${p.rating}`,
+      SHOW_AI_LABEL
+        ? `${p.ai_label || "内容由AI生成"} · ${p.safety_label || "已通过内容安全审核"} · 分级 ${p.rating}`
+        : `分级 ${p.rating}`,
       56,
       1236,
     );

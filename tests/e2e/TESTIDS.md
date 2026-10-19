@@ -28,7 +28,7 @@ but test ids make the suite stable. Page routes are discovered by clicking, not 
 | Play | `illustration` | `img` | scene illustration |
 | Play | `audio-player` | `audio` | narration TTS |
 | Play | `genui` | — | generative UI area; each panel `ui-<type>` e.g. `ui-status_panel`, `ui-relationship_graph`, `ui-inventory`, `ui-map` |
-| Play | `ai-label` | 「内容由AI生成」 | AI content marker |
+| Play | `ai-label` | 「内容由AI生成」 | AI content marker — only rendered when built with `NEXT_PUBLIC_ZM_SHOW_AI_LABEL=1` (hidden by default per user request; run e2e with `ZM_SHOW_AI_LABEL=1` to assert it) |
 | Play | `report-btn` | 「举报」 | opens report dialog; submit `report-submit` |
 | Play | `safety-notice` | — | blocked/crisis message |
 | Memory | `memory-query-input` / `memory-query-btn` / `memory-answer` / `citation` | 「回忆」/「记忆」 | F4 query |

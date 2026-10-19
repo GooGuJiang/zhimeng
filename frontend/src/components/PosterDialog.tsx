@@ -7,8 +7,10 @@ import { api, assetUrl, errorText } from "@/lib/api";
 import type { Asset, Poster, World } from "@/lib/types";
 import { canRecordVideo, downloadBlob, recordEndingVideo } from "@/lib/video";
 import { Dialog } from "./Dialog";
-import { AI_LABEL } from "./AiLabel";
+import { AI_LABEL, SHOW_AI_LABEL } from "./AiLabel";
 import { useToast } from "./Toast";
+
+const POSTER_BG = "#12162a";
 
 function localPoster(world: World, assets: Asset[]): Poster {
   return {
@@ -22,7 +24,7 @@ function localPoster(world: World, assets: Asset[]): Poster {
       .map((c) => ({ name: c.name, role: c.role, emoji: c.avatar_emoji ?? "" })),
     stats: { turns: world.state.turn, chapters: world.state.chapter, events: 0 },
     image_url: assets.find((a) => a.type === "image")?.url ?? null,
-    theme: { primary: "#f1d59a", secondary: "#d66d7f", background: "#12162a" },
+    theme: { primary: "#f1d59a", secondary: "#d66d7f", background: POSTER_BG },
     qr_text: typeof window !== "undefined" ? window.location.origin : "",
     ai_label: world.ai_label || AI_LABEL,
     safety_label: "已通过内容安全审核",
@@ -46,14 +48,28 @@ export function PosterDialog({
   useEffect(() => {
     api
       .poster(world.id)
-      .then(setPoster)
+      // a partial / malformed server poster falls back field-by-field to the local one
+      .then((p) => {
+        const local = localPoster(world, assets);
+        setPoster(
+          p && typeof p === "object" && !Array.isArray(p)
+            ? { ...local, ...p, characters: Array.isArray(p.characters) ? p.characters : local.characters }
+            : local,
+        );
+      })
       .catch(() => setPoster(localPoster(world, assets)));
   }, [world, assets]);
 
   const savePng = async () => {
     if (!ref.current) return;
     try {
-      const url = await toPng(ref.current, { pixelRatio: 2, cacheBust: true });
+      // export as a solid, square-cornered card: no transparent rounded corners / drop shadow in the PNG
+      const url = await toPng(ref.current, {
+        pixelRatio: 2,
+        cacheBust: true,
+        backgroundColor: poster?.theme?.background || POSTER_BG,
+        style: { borderRadius: "0", boxShadow: "none", margin: "0" },
+      });
       const a = document.createElement("a");
       a.href = url;
       a.download = `织梦-${world.title}-海报.png`;
@@ -89,6 +105,7 @@ export function PosterDialog({
             {poster.image_url ? (
               <div className="poster-img" style={{ backgroundImage: `url(${assetUrl(poster.image_url)})` }} />
             ) : null}
+            <div className="poster-scrim" aria-hidden />
             <div className="p-eyebrow">织 梦 · 我 的 世 界</div>
             <h3 className="p-title" style={{ color: poster.theme?.primary }}>
               {poster.title}
@@ -108,7 +125,9 @@ export function PosterDialog({
                   {poster.stats.turns} 回合 · {poster.stats.chapters} 章 · {poster.stats.events} 场外事件
                 </div>
                 <div>
-                  {poster.ai_label || AI_LABEL} · {poster.safety_label} · 分级 {poster.rating}
+                  {SHOW_AI_LABEL
+                    ? `${poster.ai_label || AI_LABEL} · ${poster.safety_label} · 分级 ${poster.rating}`
+                    : `分级 ${poster.rating}`}
                 </div>
               </div>
               <div style={{ textAlign: "right", maxWidth: 120, wordBreak: "break-all" }}>
@@ -121,7 +140,9 @@ export function PosterDialog({
         )}
         <div className="stack poster-actions">
           <p className="muted" style={{ margin: 0 }}>
-            海报与短视频均附带「{AI_LABEL}」与内容安全标识，可放心分享。
+            {SHOW_AI_LABEL
+              ? `海报与短视频均附带「${AI_LABEL}」与内容安全标识，可放心分享。`
+              : "保存海报或导出结局短视频，留住这段旅程。"}
           </p>
           <button
             type="button"

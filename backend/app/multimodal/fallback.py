@@ -12,7 +12,11 @@ PALETTES = [("#1e1b4b", "#7c3aed", "#f5d0fe"), ("#0f172a", "#0ea5e9", "#e0f2fe")
             ("#052e16", "#16a34a", "#dcfce7"), ("#3f0d12", "#e11d48", "#ffe4e6"), ("#111827", "#6b7280", "#f3f4f6")]
 
 
-def placeholder_svg(title: str, caption: str = "", label: str = "内容由AI生成 · 插画占位") -> bytes:
+def placeholder_svg(title: str, caption: str = "", label: str | None = None) -> bytes:
+    if label is None:  # visible label only when ZM_SHOW_AI_LABEL=1 (user request); ai_meta is unaffected
+        from app.safety.labels import show_visible_label
+
+        label = "内容由AI生成 · 插画占位" if show_visible_label() else ""
     h = int(hashlib.sha256((title + caption).encode()).hexdigest(), 16)
     bg, accent, fg = PALETTES[h % len(PALETTES)]
     lines = textwrap.wrap(caption.replace("\n", " "), 26)[:4]
@@ -28,7 +32,7 @@ def placeholder_svg(title: str, caption: str = "", label: str = "内容由AI生�
 <path d="M0 560 L220 400 L380 500 L620 330 L860 520 L1040 420 L1280 540 L1280 720 L0 720 Z" fill="{bg}" opacity="0.55"/>
 <text x="80" y="360" font-size="56" font-weight="bold" fill="{fg}" font-family="sans-serif">{html.escape(title[:24])}</text>
 {cap}
-<text x="1200" y="690" font-size="20" fill="{fg}" opacity="0.7" text-anchor="end">{html.escape(label)}</text>
+{f'<text x="1200" y="690" font-size="20" fill="{fg}" opacity="0.7" text-anchor="end">{html.escape(label)}</text>' if label else ""}
 </svg>"""
     return svg.encode("utf-8")
 

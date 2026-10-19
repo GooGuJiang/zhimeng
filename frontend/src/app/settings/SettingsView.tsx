@@ -8,7 +8,7 @@ import { usePrefs } from "@/hooks/usePrefs";
 import { useCurrentWorld } from "@/hooks/useCurrentWorld";
 import { ReportDialog } from "@/components/ReportDialog";
 import { useToast } from "@/components/Toast";
-import { AI_LABEL } from "@/components/AiLabel";
+import { AI_LABEL, SHOW_AI_LABEL } from "@/components/AiLabel";
 
 const RATINGS: { v: Rating; l: string; d: string }[] = [
   { v: "all", l: "全年龄", d: "无暴力细节、无恐怖与成人内容" },
@@ -210,7 +210,7 @@ export function SettingsView() {
             </div>
             <ul className="points">
               <li>输入与生成内容双向过滤：关键词 + 模型审核。</li>
-              <li>所有 AI 生成内容均标注「{policy?.ai_label || AI_LABEL}」。</li>
+              {SHOW_AI_LABEL ? <li>所有 AI 生成内容均标注「{policy?.ai_label || AI_LABEL}」。</li> : null}
               <li>危机类表达不会进入剧情，而是优先给出求助热线。</li>
               <li>API 密钥只保存在服务端，浏览器不接触任何密钥。</li>
             </ul>

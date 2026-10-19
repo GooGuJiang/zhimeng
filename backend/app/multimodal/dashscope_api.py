@@ -26,7 +26,10 @@ from app.config import get_settings
 log = logging.getLogger("zhimeng.multimodal")
 
 
-WATERMARK = os.getenv("ZM_IMAGE_WATERMARK", "1").lower() not in {"0", "false", "no"}  # explicit AI label
+# visible "AI生成" corner watermark on Wanx images: explicit ZM_IMAGE_WATERMARK wins, otherwise it follows
+# ZM_SHOW_AI_LABEL (default off, user request). Implicit labels (ai_meta / PNG metadata) are unaffected.
+WATERMARK = os.getenv("ZM_IMAGE_WATERMARK", os.getenv("ZM_SHOW_AI_LABEL", "0")).strip().lower() in {
+    "1", "true", "yes", "on"}
 
 
 def redact(text: object) -> str:

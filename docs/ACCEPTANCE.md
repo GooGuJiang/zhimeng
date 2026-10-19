@@ -22,3 +22,10 @@ E2E `tests/e2e/ac.spec.ts`；演示截图 `tests/e2e/demo.spec.ts`；首字延�
 | AC-10 | — | — | — | 跳过 | 公网部署不在本轮范围；提供 `docker compose` 一键部署 |
 
 另：BUG-006 降级（模型全链不可用 → 本地模板，`source=fallback`）由 `test_v12_whole_model_chain_down_degrades_to_templates` 黑盒验证。
+
+## 变更：可见 AI 标识默认隐藏（2026-10-19，用户要求）
+- 用户要求移除界面上所有**可见**的 AI 生成标识（「内容由AI生成」徽标、插画角「AI 生成」、面板「AI 编排/AI 数据/本地生成」、占位插画「内容由AI生成 · 插画占位」、海报弹窗说明行、海报与短视频上印的标识文字）。
+- 实现为单一开关：前端 `NEXT_PUBLIC_ZM_SHOW_AI_LABEL`（构建期，默认关 → 不渲染、无空位），后端 `ZM_SHOW_AI_LABEL`（占位 SVG 角标、万相 watermark 默认跟随；`ZM_IMAGE_WATERMARK` 可单独覆盖）。compose 用同一个 `ZM_SHOW_AI_LABEL` 驱动两者。
+- 未改动：接口 `ai_generated` / `ai_label` / `safety_label` 字段、`ai_meta`、PNG iTXt 隐式元数据。
+- AC-7 验收调整：e2e 仍校验接口标识字段；可见徽标仅在 `ZM_SHOW_AI_LABEL=1`（并以 `NEXT_PUBLIC_ZM_SHOW_AI_LABEL=1` 构建前端）时断言可见，默认断言 `[data-testid^=ai-label]` 数量为 0。后端单测 `test_placeholder_visible_label_switch` 覆盖两种状态。
+- 合规提示：对外公开上线时，《人工智能生成合成内容标识办法》要求显式标识，届时应设 `ZM_SHOW_AI_LABEL=1`。

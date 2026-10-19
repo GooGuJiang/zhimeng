@@ -3,6 +3,9 @@ import { expect, type Locator, type Page, type APIRequestContext } from "@playwr
 export const API = process.env.ZM_API ?? "http://localhost:8000";
 export const DEMO_PROMPT = "一个民国上海滩的侦探故事，我是报社记者";
 export const AI_LABEL = "内容由AI生成";
+/** Visible AI badges are hidden by default (user request); set ZM_SHOW_AI_LABEL=1 when the web build used
+ *  NEXT_PUBLIC_ZM_SHOW_AI_LABEL=1. The API fields ai_generated/ai_label are asserted either way. */
+export const SHOW_AI_LABEL = ["1", "true", "yes", "on"].includes((process.env.ZM_SHOW_AI_LABEL ?? "").toLowerCase());
 export const REAL = (process.env.ZM_MODE ?? "") === "real";
 
 /** data-testid first, then any of the fallbacks (visible text / role). */

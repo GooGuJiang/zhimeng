@@ -38,14 +38,14 @@ export function Dialog({
         aria-label={title}
         data-testid={testId}
       >
-        <div className="card-h">
+        <div className="card-h dialog-h">
           <i className="knot" aria-hidden />
           <h2 className="h2">{title}</h2>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭" data-close>
             <X size={16} />
           </button>
         </div>
-        {children}
+        <div className="dialog-body">{children}</div>
       </div>
     </div>,
     document.body,

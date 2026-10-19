@@ -14,6 +14,17 @@ from typing import Any
 
 from app.schemas import AI_LABEL  # single source of truth ("内容由AI生成")
 
+def show_visible_label() -> bool:
+    """Visible AI badges/watermarks (user request: off by default; ``ZM_SHOW_AI_LABEL=1`` re-enables).
+
+    Only the *visible* explicit labels follow this switch; payload fields (``ai_generated``/``ai_label``)
+    and implicit metadata (``ai_meta``, PNG iTXt) are always kept.
+    """
+    import os
+
+    return os.getenv("ZM_SHOW_AI_LABEL", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 SAFETY_LABEL = "本内容由AI生成，已经过内容安全审核，仅供娱乐与学习参考"
 RATING_LABELS = {"all": "全年龄", "teen": "12+", "mature": "16+"}
 GENERATOR = "织梦 Zhimeng AI Narrative Engine"

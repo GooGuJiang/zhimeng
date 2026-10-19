@@ -7,6 +7,7 @@ import base64
 import inspect
 import json
 import logging
+import os
 import struct
 import wave
 import zlib
@@ -60,7 +61,9 @@ def test_fallback_zero_remote_calls(env, monkeypatch):
     img = run(multimodal.illustrate("w1", "民国上海外滩夜景，报社记者", turn_id="t1"))
     assert img.type == "image" and img.source == "fallback" and img.turn_id == "t1"
     svg = _file(env, img).read_bytes()
-    assert svg.startswith(b"<svg") and "内容由AI生成".encode() in svg
+    assert svg.startswith(b"<svg")
+    # visible label follows ZM_SHOW_AI_LABEL (default off, user request)
+    assert ("内容由AI生成".encode() in svg) == (os.getenv("ZM_SHOW_AI_LABEL", "0") in {"1", "true", "yes", "on"})
     aud = run(multimodal.speak("w1", "夜色笼罩着外滩。"))
     assert aud.type == "audio" and aud.source == "fallback" and aud.prompt == "夜色笼罩着外滩。"
     with wave.open(str(_file(env, aud))) as w:
@@ -817,3 +820,12 @@ def test_deadline_upgrade_bumps_version_via_orm_listener(remote, monkeypatch):
     assert row.source == "dashscope"
     if hasattr(row, "version"):
         assert row.version == 2 and row.updated_at is not None
+
+
+def test_placeholder_visible_label_switch(monkeypatch):
+    from app.multimodal.fallback import placeholder_svg
+
+    monkeypatch.delenv("ZM_SHOW_AI_LABEL", raising=False)
+    assert "内容由AI生成".encode() not in placeholder_svg("织梦", "夜")
+    monkeypatch.setenv("ZM_SHOW_AI_LABEL", "1")
+    assert "内容由AI生成 · 插画占位".encode() in placeholder_svg("织梦", "夜")

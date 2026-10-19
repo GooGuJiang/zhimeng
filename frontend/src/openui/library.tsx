@@ -512,6 +512,14 @@ export const KnowledgeCard = defineComponent({
   component: ({ props }) => <FlipCard {...props} />,
 });
 
+/** plain-text preview of a (possibly markdown) explanation for the card front */
+const peek = (md: string) =>
+  md
+    .replace(/[`*_>#~|[\]()-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+
 function FlipCard({ title, content, source }: { title: string; content: string; source?: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -523,16 +531,18 @@ function FlipCard({ title, content, source }: { title: string; content: string; 
       data-testid="knowledge-card"
     >
       <span className="zu-kc-inner">
-        <span className="zu-kc-front">
+        <span className="zu-kc-front" aria-hidden={open}>
           <span className="zu-kc-tag">知识点</span>
           <strong>{title}</strong>
-          <span className="zu-kc-hint">轻触翻面</span>
+          {content ? <span className="zu-kc-peek">{peek(content)}</span> : null}
+          <span className="zu-kc-hint">↻ 轻触翻面，看详解</span>
         </span>
-        <span className="zu-kc-back">
+        <span className="zu-kc-back" aria-hidden={!open}>
           <span className="zu-text s-sm">
-            <Markdown inline text={content} />
+            <Markdown inline text={content || "（暂无详解）"} />
           </span>
           {source ? <span className="zu-text s-xs c-muted">出处：{source}</span> : null}
+          <span className="zu-kc-hint">↺ 轻触翻回</span>
         </span>
       </span>
     </button>
