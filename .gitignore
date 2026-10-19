@@ -5,3 +5,12 @@ tests/e2e/playwright-report/
 __pycache__/
 .pytest_cache/
 *.log
+
+# belt and braces (sub-dirs also ignore these)
+data/
+.venv/
+.next/
+*.sqlite
+*.sqlite3
+.env.*
+!.env.example
