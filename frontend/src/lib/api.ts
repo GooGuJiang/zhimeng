@@ -153,6 +153,12 @@ export const api = {
     ),
 
   assets: (id: string) => request<Asset[]>(`/worlds/${id}/assets`),
+  /** v1.3: one asset; `wait` (0–8 s) long-polls while it is pending. 404 if it doesn't exist. */
+  asset: (assetId: string, wait = 8, signal?: AbortSignal) =>
+    request<Asset>(`/assets/${assetId}?wait=${Math.max(0, Math.min(8, wait))}`, {
+      signal,
+      timeout: (Math.min(8, wait) + 10) * 1000,
+    }),
   illustrate: (id: string, body: { turn_id?: string; prompt?: string }) =>
     request<Asset>(`/worlds/${id}/assets/illustration`, { method: "POST", json: body, ...slow }),
   tts: (id: string, body: { text: string; voice?: string; turn_id?: string }) =>

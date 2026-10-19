@@ -155,6 +155,11 @@ export interface Asset {
   prompt: string;
   source: "dashscope" | "fallback";
   created_at: string;
+  /** v1.3: pending = placeholder while the real file is generated (same id upgrades in place). */
+  status?: "pending" | "ready";
+  /** v1.3: +1 per in-place upgrade / regenerate; url carries ?v= when > 1. */
+  version?: number;
+  updated_at?: string;
 }
 export interface SafetyResult {
   allowed: boolean;
