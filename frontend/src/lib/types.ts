@@ -79,9 +79,16 @@ export interface World {
   created_at: string;
   updated_at: string;
   source: "llm" | "fallback";
+  /** v1.2 */
+  opening_options?: Option[];
+  /** v1.2 two-step generation: preview first, details merged in the background. */
+  detail_status?: DetailStatus;
+  /** v1.2: original generation request (incl. the latest `refine`). */
+  gen_request?: (GenerateWorldRequest & { refine?: string | null }) | null;
   ai_generated: true;
   ai_label: string;
 }
+export type DetailStatus = "enriching" | "complete" | "local";
 export interface WorldSummary {
   id: string;
   title: string;
@@ -136,6 +143,8 @@ export interface Turn {
   created_at: string;
   ai_generated: true;
   ai_label: string;
+  /** v1.2: "fallback" = model chain failed, local template narration. */
+  source?: "llm" | "fallback";
 }
 export interface Asset {
   id: string;
@@ -198,6 +207,8 @@ export interface GenerateWorldRequest {
   source_text?: string | null;
   minor_mode?: boolean;
   rating?: Rating;
+  /** v1.2: keep the SSE open until step-2 details are merged. */
+  wait_details?: boolean;
 }
 export interface NpcView {
   character: Character;

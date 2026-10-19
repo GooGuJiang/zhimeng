@@ -109,8 +109,10 @@ export function PlayView({ id }: { id: string }) {
   const latestKey = p.live ? "live" : lastTurn ? lastTurn.id : "opening";
 
   const media = (list: Asset[], autoPlay = false) => {
-    const img = [...list].reverse().find((a) => a.type === "image");
-    const aud = [...list].reverse().find((a) => a.type === "audio");
+    // newest first (v1.2: the opening may get a newer image/audio pair after enrichment)
+    const byNew = [...list].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    const img = byNew.find((a) => a.type === "image");
+    const aud = byNew.find((a) => a.type === "audio");
     return (
       <>
         {img ? <Illustration asset={img} onReplace={replaceAsset} /> : null}
@@ -171,6 +173,11 @@ export function PlayView({ id }: { id: string }) {
           {media(assetsFor(t.id, isLatest))}
           <div className="turn-meta">
             <AiLabel text={t.ai_label} />
+            {t.source === "fallback" ? (
+              <span className="tag" title="大模型暂不可用，本回合由本地叙事模板生成">
+                本地叙事
+              </span>
+            ) : null}
             <span>
               第{t.chapter}章 · 第{t.index}回合
             </span>
@@ -356,6 +363,11 @@ export function PlayView({ id }: { id: string }) {
                             此刻，别处 · {e.summary}
                           </span>
                         ))}
+                    </div>
+                  ) : null}
+                  {p.live.fallback ? (
+                    <div className="faint" style={{ fontSize: 12 }} data-testid="narration-fallback">
+                      模型连接中断，已改由本地叙事模板重新讲述本回合
                     </div>
                   ) : null}
                   <p className="narr live">

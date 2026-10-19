@@ -6,6 +6,8 @@
 import type { Progress } from "@/lib/types";
 
 export const STAGE_LABELS: Record<string, string> = {
+  fallback: "改由本地叙事",
+  done: "完成",
   safety: "安全审查",
   outline: "勾勒世界",
   locations: "铺陈地理",

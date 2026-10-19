@@ -39,6 +39,8 @@ export interface LiveTurn {
   events: WorldEvent[];
   progress: Progress | null;
   rewrite: boolean;
+  /** v1.2: narration was reset and is being re-told by the local template. */
+  fallback?: boolean;
 }
 
 const mergeById = <T extends { id: string }>(base: T[], add: T[]) => {
@@ -131,41 +133,41 @@ export function usePlay(worldId: string) {
     };
   }, [worldId, refreshSide]);
 
-  // Opening illustration/voice may be produced asynchronously after confirm: poll briefly.
-  const hasImage = assets.some((a) => a.type === "image");
-  useEffect(() => {
-    if (!loaded || hasImage) return;
-    let n = 0;
-    const t = setInterval(() => {
-      if (++n > 12) return clearInterval(t);
-      api
-        .assets(worldId)
-        .then((as) => as.length && setAssets((old) => mergeById(old, as)))
-        .catch(() => {});
-    }, 2500);
-    return () => clearInterval(t);
-  }, [loaded, hasImage, worldId]);
-
-  // Opening is a key scene (F5): if the backend produced its illustration but no narration audio,
-  // ask once for TTS of the opening (server caches by text hash, so reloads don't re-synthesise).
-  const openingVoiceAsked = useRef(false);
+  // v1.2: confirm generates the opening illustration + narrator audio in the background (turn_id=null,
+  // no SSE asset event). Poll GET /assets with backoff until both exist (capped). Step-2 enrichment may
+  // rewrite the opening and produce a newer pair, so keep polling (world + assets) while it is enriching.
   const hasOpeningTurn = turns.some((t) => t.index === 0);
   const openingImage = assets.some((a) => a.type === "image" && !a.turn_id);
   const openingAudio = assets.some((a) => a.type === "audio" && !a.turn_id);
+  const enriching = world?.detail_status === "enriching";
+  const needOpening = !hasOpeningTurn && (!openingImage || !openingAudio);
   useEffect(() => {
-    if (!loaded || !world || hasOpeningTurn || openingAudio || !openingImage || openingVoiceAsked.current)
-      return;
-    const text = (world.opening_scene || "").trim();
-    if (!text) return;
-    const t = setTimeout(() => {
-      openingVoiceAsked.current = true;
-      api
-        .tts(worldId, { text: text.slice(0, 600) })
-        .then((a) => setAssets((old) => mergeById(old, [{ ...a, turn_id: null }])))
-        .catch(() => {});
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [loaded, world, hasOpeningTurn, openingAudio, openingImage, worldId]);
+    if (!loaded || (!needOpening && !enriching)) return;
+    let live = true;
+    let n = 0;
+    let delay = 1500;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (!live || ++n > 14) return; // ~2 min total with backoff
+      const [as, w] = await Promise.allSettled([
+        api.assets(worldId),
+        enriching ? api.getWorld(worldId) : Promise.resolve(null),
+      ]);
+      if (!live) return;
+      if (as.status === "fulfilled" && as.value.length) setAssets((old) => mergeById(old, as.value));
+      if (w.status === "fulfilled" && w.value) {
+        worldCache.set(w.value);
+        setWorld(w.value);
+      }
+      delay = Math.min(10_000, Math.round(delay * 1.5));
+      timer = setTimeout(tick, delay);
+    };
+    timer = setTimeout(tick, delay);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [loaded, needOpening, enriching, worldId]);
 
   // ---- typewriter ----
   const typing = !!live && live.text.length < targetText.length;
@@ -232,6 +234,16 @@ export function usePlay(worldId: string) {
             const d = (data ?? {}) as Record<string, unknown>;
             switch (event) {
               case "progress":
+                if (d.stage === "fallback" && d.reset) {
+                  // v1.2 (BUG-006): the model stream broke; the server restarts with local-template
+                  // narration — drop what was shown so far (done.turn.narration stays authoritative).
+                  target.current = "";
+                  setTargetText("");
+                  setLive((l) =>
+                    l ? { ...l, text: "", fallback: true, progress: d as unknown as Progress } : l,
+                  );
+                  break;
+                }
                 setLive((l) => (l ? { ...l, progress: d as unknown as Progress } : l));
                 break;
               case "memory":
