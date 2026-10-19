@@ -9,7 +9,12 @@ export interface Prefs {
   autoVoice: boolean;
   fontScale: number;
 }
-export const defaultPrefs: Prefs = { minorMode: false, reducedMotion: "system", autoVoice: false, fontScale: 1 };
+export const defaultPrefs: Prefs = {
+  minorMode: false,
+  reducedMotion: "system",
+  autoVoice: false,
+  fontScale: 1,
+};
 
 const safe = <T>(fn: () => T, fallback: T): T => {
   try {
@@ -39,7 +44,8 @@ export const store = {
     ),
   setPending: (id: string, v: { action: string; option_id: string | null; client_turn_id: string } | null) =>
     safe(
-      () => (v ? localStorage.setItem(KEY_DRAFT(id), JSON.stringify(v)) : localStorage.removeItem(KEY_DRAFT(id))),
+      () =>
+        v ? localStorage.setItem(KEY_DRAFT(id), JSON.stringify(v)) : localStorage.removeItem(KEY_DRAFT(id)),
       undefined,
     ),
 };
