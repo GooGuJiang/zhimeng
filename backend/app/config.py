@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     embedding_dim: int = 1024
     image_model: str = "wanx2.1-t2i-turbo"
-    tts_model: str = "qwen-tts"
+    tts_model: str = "qwen3-tts-flash"  # qwen-tts 已 404（BUG-002）
     tts_voice: str = "Cherry"
 
     force_fallback: bool = False  # ZM_FORCE_FALLBACK=1 → never call remote APIs
