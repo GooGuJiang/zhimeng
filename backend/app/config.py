@@ -18,6 +18,13 @@ class Settings(BaseSettings):
 
     chat_model: str = "qwen-plus"
     fast_model: str = "qwen-turbo"
+    skeleton_model: str = "qwen-flash"   # 世界生成第一步（≤5s 骨架预览）
+    # 备用模型链（逗号分隔，按顺序切换；429/限流/连接断开/5xx/模型不可用时切到下一个）。
+    # 2026-10-19 实测该 key 可用：qwen-plus / qwen-plus-latest / qwen-max / qwen-flash / qwen-turbo（qwen-max-latest、qwen3-max 404）
+    chat_model_chain: str = "qwen-plus,qwen-plus-latest,qwen-max,qwen-turbo,qwen-flash"
+    fast_model_chain: str = "qwen-turbo,qwen-flash,qwen-plus,qwen-plus-latest"
+    skeleton_model_chain: str = "qwen-flash,qwen-turbo,qwen-plus"
+    model_cooldown_s: float = 30.0       # 限流/断连后该模型冷却时间（期间优先跳过）
     embedding_model: str = "text-embedding-v3"
     embedding_dim: int = 1024
     image_model: str = "wanx2.1-t2i-turbo"

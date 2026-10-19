@@ -53,10 +53,16 @@ async def _validation_error(_: Request, exc: RequestValidationError):
 
 @app.get("/api/health")
 async def health():
+    from app.llm.client import stats as llm_stats
+
     s = get_settings()
+    st = llm_stats()
     return {"status": "ok", "llm": s.llm_enabled, "fallback": not s.llm_enabled,
+            "llm_runtime": {"last_model": st["last_model"], "switches": st["switches"], "cooling": st["cooling"]},
             "models": {"chat": s.chat_model, "fast": s.fast_model, "embedding": s.embedding_model,
-                       "image": s.image_model, "tts": s.tts_model}, "version": VERSION}
+                       "image": s.image_model, "tts": s.tts_model,
+                       "skeleton": s.skeleton_model, "chat_chain": s.chat_model_chain.split(","),
+                       "fast_chain": s.fast_model_chain.split(",")}, "version": VERSION}
 
 
 for _name in ROUTE_MODULES:
