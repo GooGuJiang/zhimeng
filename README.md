@@ -180,7 +180,7 @@ pnpm test                         # AC-1 ~ AC-9
 ZM_MODE=real pnpm test            # 真实模型模式（放宽超时；回合被限流失败时像用户一样点「重试」，次数记入测试注解）
 pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/（ZM_MODE=real pnpm demo 用真实模型）
 
-# 前端 mock 回归（只需前端在跑；含世界面板吸顶 / Markdown 渲染 / 手机端切换，截图 fe-27~fe-29）
+# 前端 mock 回归（只需前端在跑；含世界面板吸顶 / Markdown 渲染 / 手机端切换，截图 fe-30~fe-32）
 cd frontend && ZM_WEB=http://localhost:3000 pnpm test:mock
 
 # API 冒烟打到运行中的服务（例如真实模型模式）
@@ -194,8 +194,8 @@ ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tes
 - **世界面板吸顶**：桌面端右侧「世界面板」随页面滚动固定在顶栏下方（内容超出时面板内部独立滚动），回合流式生成时实时刷新；手机端改为顶部吸附的「故事 / 世界面板」切换。
 - **Markdown 渲染**：旁白、开场、世界设定、记忆问答、学习小结、场外事件与生成式 UI 文本均按 Markdown（GFM：标题、粗斜体、列表、引用、代码、表格）渲染；不渲染原始 HTML、不加载模型给出的远程图片；流式输出中未闭合的 `**` / `` ` `` / ``` 会临时补齐，避免闪烁。
 
-![世界面板吸顶](docs/screens/fe-27-sticky-world.png)
-![Markdown 渲染](docs/screens/fe-28-markdown.png)
+![世界面板吸顶](docs/screens/fe-30-sticky-world.png)
+![Markdown 渲染](docs/screens/fe-31-markdown.png)
 
 ## 演示脚本
 

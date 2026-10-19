@@ -1,7 +1,7 @@
 /**
  * UI polish (mocked API): the 世界面板 stays in view while the story scrolls, model text renders as
  * Markdown (headings / bold / lists / tables, no raw HTML), partial markdown streams without breaking,
- * and phones get a 故事/世界面板 switch. Screenshots → docs/screens/fe-27…fe-29.
+ * and phones get a 故事/世界面板 switch. Screenshots → docs/screens/fe-30…fe-32.
  */
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -74,7 +74,7 @@ test("世界面板 is sticky while the story scrolls; narration renders markdown
   expect(after!.y).toBeLessThan(120);
   expect(after!.y + after!.height).toBeLessThanOrEqual(900 + 1);
   expect(before).not.toBeNull();
-  await page.screenshot({ path: `${SHOTS}/fe-27-sticky-world.png` });
+  await page.screenshot({ path: `${SHOTS}/fe-30-sticky-world.png` });
 
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   await page.waitForTimeout(400);
@@ -84,7 +84,7 @@ test("世界面板 is sticky while the story scrolls; narration renders markdown
     .evaluate((el) => window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 140));
   await page.waitForTimeout(300);
   await expect(side).toBeInViewport();
-  await page.screenshot({ path: `${SHOTS}/fe-28-markdown.png` });
+  await page.screenshot({ path: `${SHOTS}/fe-31-markdown.png` });
 });
 
 test("streaming partial markdown types cleanly and the panel updates from the stream", async ({ page }) => {
@@ -134,7 +134,7 @@ test("phones: 故事 / 世界面板 switch keeps the layout single-column", asyn
   await expect(page.getByTestId("world-panel")).toBeVisible();
   await expect(page.getByTestId("narration")).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: `${SHOTS}/fe-29-mobile-world-tab.png` });
+  await page.screenshot({ path: `${SHOTS}/fe-32-mobile-world-tab.png` });
   await tabs.getByRole("tab", { name: "故事" }).click();
   await expect(page.getByTestId("narration")).toBeVisible();
 });
