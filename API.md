@@ -176,7 +176,7 @@ v1.3 deadlines: the illustration / tts / regenerate endpoints answer within ~8 s
 (1) `asset` events inside any open turn stream (see F2), (2) `GET /api/assets/{id}?wait=8`, (3) `GET /worlds/{id}/assets`. `status:"ready"` with
 `source:"fallback"` means the real generation failed and the placeholder is final.
 Auto: turns flagged `key_scene` (opening, chapter boundary, injected/major events) emit `asset` events for image + audio
-(v1.3: waits at most 10 s, then sends placeholders with `status:"pending"`; the same ids upgrade in place later). Fallback: SVG illustration / silent WAV placeholder.
+(v1.3: waits at most `KEY_SCENE_MEDIA_DEADLINE_S`, default 3 s, then sends placeholders with `status:"pending"`; the same ids upgrade in place later). Fallback: SVG illustration / silent WAV placeholder.
 
 ### F6 Generative UI
 `GET /api/worlds/{id}/ui?components=status_panel,relationship_graph,inventory,map,event_feed,knowledge_cards` → `{ "components": UIComponent[], "ai_generated": true }`
@@ -246,7 +246,7 @@ If it is not ready in time, the response is the local summary with `status:"pend
 ### v1.3 (2026-10-19, backend core) — additive
 - `Asset.status` (`pending`|`ready`), `Asset.version`, `Asset.updated_at`; upgraded urls change (new file + `?v=version`).
 - `GET /api/assets/{id}` (+ `?wait=` long-poll, max 8 s).
-- Illustration / tts / regenerate endpoints use an 8 s deadline (placeholder + background in-place upgrade); key-scene media waits ≤10 s;
+- Illustration / tts / regenerate endpoints use an 8 s deadline (placeholder + background in-place upgrade); key-scene media waits ≤`KEY_SCENE_MEDIA_DEADLINE_S` (default 3 s);
   opening image/audio placeholders appear ~1 s after confirm and upgrade in place.
 - Upgrade signal inside open turn streams: `asset` event with the same id, `status:"ready"` (also for this turn's key-scene assets).
 - Turn input safety fast path (`safety` + `done{blocked:true}` may now arrive after some `token`s); post-commit narration review.

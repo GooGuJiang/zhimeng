@@ -531,14 +531,15 @@ def _spawn(coro) -> None:
 
 
 REVIEW_WAIT_S = 3.0      # 提交前等待输入 LLM 复核的上限
-MEDIA_DEADLINE_S = 10.0  # 关键场景媒体：超时先给占位（status=pending），后台完成后同 id 原地升级
 OPENING_DEADLINE_S = 1.0  # 开局媒体本就在后台：尽快落占位行（前端轮询 /assets 立刻可见），真实文件到后原地升级
 
 
 async def key_scene_media(world: World, turn: Turn, narration: str, emit: Emit | None = None,
-                          deadline: float = MEDIA_DEADLINE_S) -> list[Any]:
+                          deadline: float | None = None) -> list[Any]:
     """关键场景：插画 + 配音（multimodal.key_scene_assets，deadline 内拿不到真实文件就先返回占位）。
     占位行在后台升级（同 id、新 url、version+1）；回合流仍打开时由 run_turn 的 watcher 在流内推送升级后的 asset。"""
+    if deadline is None:  # 配置项 KEY_SCENE_MEDIA_DEADLINE_S（默认 3s）
+        deadline = get_settings().key_scene_media_deadline_s
     loc = world.loc(world.state.player_location_id)
     try:
         # key_scene_assets 从 world["minor_mode"] 读取未成年人模式（插画负面词更严格）

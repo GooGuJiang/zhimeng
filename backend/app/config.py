@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     sync_llm_timeout_s: float = 8.0
     # 安全审核单次调用时限：超时退回关键词/规则层
     guard_timeout_s: float = 6.0
+    # 回合内关键场景插画/配音最多等待秒数，超时先发占位（status=pending），后台同 id 原地升级（体验流畅优先）
+    key_scene_media_deadline_s: float = 3.0
     model_cooldown_s: float = 30.0       # 限流/断连后该模型冷却时间（期间优先跳过）
     embedding_model: str = "text-embedding-v3"
     embedding_dim: int = 1024
