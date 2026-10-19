@@ -38,15 +38,51 @@ export function PreviewView({ id }: { id: string }) {
     };
   }, [id]);
 
+  // v1.2 two-step generation: the preview arrives first; details are merged in the background.
+  // Poll GET /worlds/{id} while enriching (every ~2.5 s, capped at ~3 min).
+  const detail = world?.detail_status;
+  const enriching = detail === "enriching" && !gen.running;
+  useEffect(() => {
+    if (!enriching) return;
+    let live = true;
+    let n = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (!live || ++n > 70) return;
+      try {
+        const w = await api.getWorld(id);
+        if (!live) return;
+        worldCache.set(w);
+        setWorld(w);
+        if (w.detail_status !== "enriching") {
+          if (w.detail_status === "complete") toast("世界细节已补全");
+          return;
+        }
+      } catch {
+        /* transient: keep polling */
+      }
+      timer = setTimeout(tick, n < 20 ? 2500 : 5000);
+    };
+    timer = setTimeout(tick, 2000);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [enriching, id, toast]);
+
+  // v1.2: the original request lives in World.gen_request (state.flags.gen_request is deprecated);
+  // the tweak goes in `refine` (applied on top of the original prompt; omitted = keep the last one).
+  const lastRefine = world?.gen_request?.refine?.trim() || "";
+  const [clearRefine, setClearRefine] = useState(false);
   const regenerate = async () => {
-    // v1.1: omitted fields keep the original request, so only the prompt is extended with the tweak.
-    const orig =
-      (world?.state?.flags?.gen_request as { prompt?: string } | undefined)?.prompt ?? world?.premise ?? "";
-    const body = tweak.trim() ? { prompt: `${orig}（调整：${tweak.trim()}）` } : {};
+    const t = tweak.trim();
+    const body = t ? { refine: t } : clearRefine ? { refine: "" } : {};
     const { world: w } = await gen.run(streamPath.regenerate(id), body);
     if (w) {
       worldCache.set(w);
       setWorld(w);
+      setTweak("");
+      setClearRefine(false);
       toast("世界已重新织就");
     } else {
       api
@@ -112,6 +148,20 @@ export function PreviewView({ id }: { id: string }) {
         {world.premise || world.setting}
       </p>
 
+      {enriching ? (
+        <div className="notice row detail-enriching" data-testid="world-detail-enriching" aria-live="polite">
+          <span className="dots" aria-hidden>
+            <i />
+            <i />
+            <i />
+          </span>
+          <span>细节补全中：人物经历、地点与暗线正在后台织入，可以先进入世界，补全后会自动更新。</span>
+        </div>
+      ) : detail === "local" ? (
+        <p className="faint" style={{ fontSize: 12, margin: 0 }} data-testid="world-detail-local">
+          细节由本地规则补全（模型暂不可用），世界完整可玩。
+        </p>
+      ) : null}
       {gen.running ? <GenerationProgress gen={gen} title="重新织就" /> : null}
       {gen.safety?.blocked ? <SafetyNotice result={gen.safety} /> : null}
       {gen.error && !gen.running ? <div className="notice warn">{gen.error}（原世界未改变）</div> : null}
@@ -178,9 +228,23 @@ export function PreviewView({ id }: { id: string }) {
       </div>
 
       <div className="sticky-actions">
+        {lastRefine && !clearRefine && !tweak.trim() ? (
+          <span className="tag" data-testid="refine-current" title="下次重新生成会沿用这条补充要求">
+            沿用：{lastRefine.slice(0, 24)}
+            <button
+              type="button"
+              className="tag-x"
+              aria-label="清除补充要求"
+              onClick={() => setClearRefine(true)}
+            >
+              ×
+            </button>
+          </span>
+        ) : null}
         <input
           className="input tweak"
-          placeholder="想调整什么？（可选）"
+          data-testid="regenerate-refine"
+          placeholder={lastRefine ? "新的补充要求（留空沿用上次）" : "想调整什么？（可选，如：多一点悬疑）"}
           value={tweak}
           onChange={(e) => setTweak(e.target.value)}
           disabled={gen.running}

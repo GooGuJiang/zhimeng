@@ -8,7 +8,7 @@ import { useCallback, useRef, useState } from "react";
 import { streamSSE } from "@/lib/sse";
 import type { Progress, SafetyResult, World } from "@/lib/types";
 
-export const GEN_STAGES = ["safety", "outline", "locations", "characters", "conflict", "persist", "memory"];
+export const GEN_STAGES = ["safety", "outline", "locations", "characters", "conflict", "persist", "memory", "done"];
 
 export interface GenState {
   running: boolean;
@@ -70,6 +70,11 @@ export function useWorldGeneration() {
                 break;
               case "done":
                 if (typeof d?.world_id === "string") worldId = d.world_id;
+                // v1.2: done.detail_status is authoritative for the (first) world payload.
+                if (world && typeof d?.detail_status === "string") {
+                  world = { ...(world as World), detail_status: d.detail_status as World["detail_status"] };
+                  setState((s) => ({ ...s, world }));
+                }
                 break;
             }
           },
