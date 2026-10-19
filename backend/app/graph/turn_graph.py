@@ -27,6 +27,7 @@ from app.config import get_settings
 from app.db import TurnRow, session_scope, utcnow
 from app.memory import store
 from app.schemas import AI_LABEL, Citation, Item, KnowledgeCard, Option, Turn, TurnRequest, World, WorldEvent
+from app.services import assets as assets_svc
 from app.services import guard, repo
 from app.ui.components import build_components
 
@@ -79,6 +80,8 @@ class TurnCtx:
         self.recent = ""
         self.tasks: dict[str, asyncio.Task[Any]] = {}
         self.source = "fallback"  # 旁白来源：llm | fallback（写入 Turn.source）
+        self.review: Any = None    # 输入的后台 LLM 复核任务（check_input_fast）
+        self.flagged: Any = None   # 复核命中的 SafetyResult（blocked/crisis）→ 本回合不提交
 
 
 class TurnState(TypedDict, total=False):
@@ -196,8 +199,13 @@ async def node_safety(state: TurnState) -> TurnState:
     ctx = state["ctx"]
     await _progress(ctx, "safety", "内容安全检查…", 5)
     _start_prefetch(ctx)
+
+    def on_flag(r: Any) -> None:  # 后台 LLM 复核命中：中止叙事流、不提交（_run 发 safety + done{blocked}）
+        ctx.flagged = r
     try:
-        v = await guard.check_input(ctx.action, minor_mode=ctx.world.minor_mode, rating=ctx.world.rating, context="turn")
+        # v1.3 快速路径：规则层同步判定（危机/硬拦截/注入/分级照旧立即拦截），可疑输入的 LLM 复核在后台与叙事并行
+        v, ctx.review = await guard.check_input_fast(ctx.action, minor_mode=ctx.world.minor_mode,
+                                                     rating=ctx.world.rating, context="turn", on_flag=on_flag)
     except BaseException:
         _cancel_prefetch(ctx)
         raise
@@ -273,6 +281,9 @@ async def node_director(state: TurnState) -> TurnState:
             w, ctx.action, memory_ctx=memory_ctx, recent=ctx.recent, npc_ctx=focus_line, events_ctx=events_ctx,
             inject_ctx=inject_ctx, focus=ctx.focus, event_lines=[e.summary for e in off],
             injects=[r.summary for r in ctx.injects], turn=ctx.index):
+        if ctx.flagged is not None:  # 输入复核命中 → 立即停止推流
+            log.warning("input review flagged mid-stream → abort turn")
+            break
         if src == "reset":  # 半段 LLM 旁白作废：通知前端清空，随后的 fallback token 为整段重写（以 done.turn.narration 为准）
             raw, cf = [], guard.ChunkFilter(minor_mode=w.minor_mode)
             await ctx.emit("progress", {"stage": "fallback", "message": chunk, "pct": 60, "percent": 60, "reset": True})
@@ -294,6 +305,8 @@ async def node_director(state: TurnState) -> TurnState:
 async def node_extract(state: TurnState) -> TurnState:
     ctx = state["ctx"]
     w = ctx.world
+    if ctx.flagged is not None:
+        return {"extracted": False}
     await _progress(ctx, "extract", "提取关键事实，校验一致性…", 80)
     verdict = await guard.check_output(ctx.narration, minor_mode=w.minor_mode, rating=w.rating)
     # 流式分片可能切开敏感词（filter_chunk 拦不住）→ 入库/返回的叙事一律用全文 check_output 的 filtered_text
@@ -377,10 +390,44 @@ def _apply(ctx: TurnCtx, tick: dict[str, Any], ex: dict[str, Any]) -> None:
     ctx.options = opts
 
 
+def _review_committed(world: World, turn_id: str, narration: str) -> None:
+    """v1.3：提交后对旁白做后台 LLM 复核（safety.review_output，可疑才复核）；命中 → 已存 narration 换成 filtered_text
+    （或安全提示），同时替换该回合的事件记忆。前端下次 GET /turns 即为替换后的文本。"""
+    def on_flag(r: Any) -> None:
+        safe = getattr(r, "filtered_text", None) or guard.SAFE_NOTICE
+        try:
+            with session_scope() as s:
+                row = s.get(TurnRow, turn_id)
+                if row:
+                    row.narration = safe
+                    s.add(row)
+            store.redact_turn_memories(world.id, turn_id, safe)
+            log.warning("post-commit review flagged turn %s → narration replaced", turn_id)
+        except Exception:  # noqa: BLE001
+            log.exception("replace flagged narration failed")
+    guard.review_output(narration, minor_mode=world.minor_mode, rating=world.rating, on_flag=on_flag)
+
+
 async def node_persist(state: TurnState) -> TurnState:
     """统一提交：回合、事件、轨迹、记忆、世界状态；失败则回滚到回合前快照。"""
     ctx = state["ctx"]
     w = ctx.world
+    if ctx.review is not None and ctx.flagged is None and not ctx.review.done():
+        try:  # 提交前等输入复核（上限 REVIEW_WAIT_S；超时按规则层结果放行，复核仍在后台写缓存）
+            await asyncio.wait_for(asyncio.shield(ctx.review), timeout=REVIEW_WAIT_S)
+        except asyncio.TimeoutError:
+            log.info("input review not back in %.1fs → commit on rule-layer result", REVIEW_WAIT_S)
+        except Exception:  # noqa: BLE001
+            pass
+    if ctx.review is not None and ctx.review.done() and ctx.flagged is None:
+        try:
+            r = ctx.review.result()
+            if getattr(r, "blocked", False) or getattr(r, "crisis", False):
+                ctx.flagged = r
+        except Exception:  # noqa: BLE001
+            pass
+    if ctx.flagged is not None:
+        return {"committed": False}
     await _progress(ctx, "persist", "写入世界存档…", 90)
     snapshot_world = World.model_validate(ctx.snapshot)
     if ctx.replace_index:  # 重试：成功生成后才替换旧的最后一回合
@@ -432,6 +479,7 @@ async def node_persist(state: TurnState) -> TurnState:
             await _compress_chapter(w, ctx.chapter)
         except Exception:  # noqa: BLE001
             log.exception("chapter summary failed")
+    _review_committed(w, turn_id, ctx.narration)
     row = repo.get_turn_row(w.id, turn_id=turn_id)
     ctx.turn = repo.turn_out(row, ctx.events)  # type: ignore[arg-type]
     await ctx.emit("options", {"options": [o.model_dump() for o in ctx.options]})
@@ -482,48 +530,64 @@ def _spawn(coro) -> None:
     t.add_done_callback(_bg.discard)
 
 
-async def key_scene_media(world: World, turn: Turn, narration: str, emit: Emit | None = None,
-                          wait_s: float = 45.0) -> list[Any]:
-    """关键场景：插画 + 配音（multimodal 接口，内部缓存/降级）。超时则转后台继续，完成后补写 asset_ids。"""
-    loc = world.loc(world.state.player_location_id)
+REVIEW_WAIT_S = 3.0      # 提交前等待输入 LLM 复核的上限
+MEDIA_DEADLINE_S = 10.0  # 关键场景媒体：超时先给占位（status=pending），后台完成后同 id 原地升级
+OPENING_DEADLINE_S = 1.0  # 开局媒体本就在后台：尽快落占位行（前端轮询 /assets 立刻可见），真实文件到后原地升级
 
-    async def job() -> list[Any]:
+
+async def key_scene_media(world: World, turn: Turn, narration: str, emit: Emit | None = None,
+                          deadline: float = MEDIA_DEADLINE_S) -> list[Any]:
+    """关键场景：插画 + 配音（multimodal.key_scene_assets，deadline 内拿不到真实文件就先返回占位）。
+    占位行在后台升级（同 id、新 url、version+1）；回合流仍打开时由 run_turn 的 watcher 在流内推送升级后的 asset。"""
+    loc = world.loc(world.state.player_location_id)
+    try:
         # key_scene_assets 从 world["minor_mode"] 读取未成年人模式（插画负面词更严格）
         assets = await multimodal.key_scene_assets(world.model_dump(mode="json"), narration, turn_id=turn.id,
-                                                   location=loc.name if loc else None)
+                                                   location=loc.name if loc else None, deadline=deadline)
         if not any(a.type == "audio" for a in assets):  # 远程 TTS 不可用 → 占位音频（prompt 可供 Web Speech 朗读）
-            assets.append(await multimodal.speak(world.id, narration[:200], voice="narrator", turn_id=turn.id))
-        with session_scope() as s:
-            row = s.get(TurnRow, turn.id)
-            if row:
-                row.asset_ids = list(dict.fromkeys(list(row.asset_ids) + [a.id for a in assets]))
-                s.add(row)
-        return assets
-
-    task = asyncio.ensure_future(job())
-    try:
-        assets = await asyncio.wait_for(asyncio.shield(task), timeout=wait_s)
-    except asyncio.TimeoutError:
-        _bg.add(task)
-        task.add_done_callback(_bg.discard)
-        return []
+            assets.append(await multimodal.speak(world.id, narration[:200], voice="narrator", turn_id=turn.id,
+                                                 deadline=deadline))
     except Exception:  # noqa: BLE001
         log.exception("key scene media failed")
         return []
+    with session_scope() as s:
+        row = s.get(TurnRow, turn.id)
+        if row:
+            row.asset_ids = list(dict.fromkeys(list(row.asset_ids) + [a.id for a in assets]))
+            s.add(row)
+    out = assets_svc.enrich_all(assets)
     if emit:
-        for a in assets:
+        for a in out:
             await emit("asset", a.model_dump())
-    turn.asset_ids = [a.id for a in assets]
-    return assets
+    turn.asset_ids = [a.id for a in out]
+    return out
 
 
 async def run_turn(world_id: str, req: TurnRequest | None, *, retry: bool = False) -> AsyncIterator[tuple[str, Any]]:
     """SSE 事件生成器。图在后台任务中运行（客户端断开也会完成并提交，之后可用 client_turn_id 取回）。"""
     q: asyncio.Queue = asyncio.Queue()
     END_MARK = object()
+    # v1.3：流打开期间关注本世界的占位资产（开局/之前回合/本回合关键场景），升级完成即在流内推送 asset（status=ready）
+    watched: set[str] = set()
+    try:
+        watched |= assets_svc.world_pending(world_id)
+    except Exception:  # noqa: BLE001
+        pass
+    stop = asyncio.Event()
+
+    async def put(name: str, data: Any) -> None:
+        await q.put((name, data))
+
+    watcher = asyncio.create_task(assets_svc.watch(watched, put, stop=stop))
 
     async def emit(name: str, data: Any) -> None:
-        await q.put((name, data))
+        if name == "asset" and data.get("status") == "pending":
+            watched.add(data["id"])
+        if name == "done":  # asset 事件只出现在 done 之前：先停 watcher 并做最后一次检查
+            stop.set()
+            await asyncio.gather(watcher, return_exceptions=True)
+            await assets_svc.sweep(watched, put)
+        await put(name, data)
 
     async def runner() -> None:
         try:
@@ -533,6 +597,7 @@ async def run_turn(world_id: str, req: TurnRequest | None, *, retry: bool = Fals
             log.exception("turn failed")
             await emit("error", {"message": f"本回合生成失败（{type(e).__name__}），进度未受影响，请重试", "retryable": True})
         finally:
+            stop.set()
             await q.put(END_MARK)
 
     task = asyncio.create_task(runner())
@@ -580,6 +645,11 @@ async def _run(world_id: str, req: TurnRequest | None, retry: bool, emit: Emit) 
     finally:
         _cancel_prefetch(ctx)  # 失败/拦截时回收并行预取任务
     if out.get("blocked"):
+        await emit("done", {"blocked": True})
+        return
+    if ctx.flagged is not None:  # 后台复核命中：已推的半段旁白作废，本回合不提交
+        r = ctx.flagged
+        await emit("safety", r.model_dump() if hasattr(r, "model_dump") else dict(r))
         await emit("done", {"blocked": True})
         return
     turn = ctx.turn
@@ -636,7 +706,7 @@ def spawn_opening_media(world: World) -> None:
             loc = world.loc(world.state.player_location_id)
             prompt = multimodal.build_scene_prompt(world.model_dump(mode="json"), world.opening_scene,
                                                    loc.name if loc else None, world.minor_mode)
-            await multimodal.illustrate(world.id, prompt, minor_mode=world.minor_mode)
+            await multimodal.illustrate(world.id, prompt, minor_mode=world.minor_mode, deadline=OPENING_DEADLINE_S)
         except Exception:  # noqa: BLE001
             log.exception("opening illustration failed")
 
@@ -649,7 +719,8 @@ def spawn_opening_media(world: World) -> None:
             if r.blocked:
                 log.warning("opening narration blocked by check_output; skip tts")
                 return
-            await multimodal.speak(world.id, (r.filtered_text or text)[:600], voice="narrator", turn_id=None)
+            await multimodal.speak(world.id, (r.filtered_text or text)[:600], voice="narrator", turn_id=None,
+                                   deadline=OPENING_DEADLINE_S)
         except Exception:  # noqa: BLE001
             log.exception("opening narration failed")
 

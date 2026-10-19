@@ -63,7 +63,10 @@ type Turn = { id: string; world_id: string; index: number; chapter: number; acti
               source: "llm" | "fallback";   // v1.2: "fallback" = whole model chain failed, local template narration
               created_at: string; ai_generated: true; ai_label: string }
 type Asset = { id: string; world_id: string; type: "image"|"audio"; url: string /* /api/static/assets/<file> */; turn_id: string|null;
-               prompt: string; source: "dashscope"|"fallback"; created_at: string }
+               prompt: string; source: "dashscope"|"fallback"; created_at: string;
+               status: "pending"|"ready";   // v1.3: pending = placeholder, real file still generating (same id upgrades in place)
+               version: number;             // v1.3: +1 on every in-place upgrade / regenerate; url gets ?v=<version> when > 1
+               updated_at: string }         // v1.3
 type SafetyResult = { allowed: boolean; blocked: boolean; crisis: boolean; categories: string[]; rating: Rating;
                       message: string | null; /* user-facing message, e.g. crisis hotline */ filtered_text?: string }
 ```
@@ -137,6 +140,13 @@ Model failure (v1.2, BUG-006): the turn never ends in `error` just because the m
 local template narration (`done.turn.source:"fallback"`). Stream breaks after tokens were sent → the server first resumes by continuation;
 if that is exhausted it emits `progress {"stage":"fallback","reset":true,"message":…}` — **clear the narration shown so far** — then streams
 the full local-template narration. `done.turn.narration` is always authoritative. `error` remains only for non-model failures (retryable).
+`asset` events (v1.3) may appear anywhere **before** `done`: while a turn stream is open, any pending asset of this world (opening,
+earlier key scenes, this turn's key scene) that finishes upgrading is pushed again (same `id`, new `url`, `status:"ready"`, higher `version`);
+merge by `id`. The stream is not held open after `done` just to wait for upgrades — use `GET /api/assets/{id}?wait=8` for those.
+Safety fast path (v1.3): the rule layer (crisis / hard block / injection / rating) still blocks before anything is generated. Suspicious
+input gets a background LLM review in parallel with narration; if it flags, the stream stops and the server sends `safety` then
+`done {"blocked": true}` — **discard the partial narration**; nothing is committed. After commit, generated narration may be re-reviewed
+in the background; if flagged, the stored `Turn.narration` is replaced with a safe text (visible on the next `GET /turns`).
 `token` granularity (v1.2): real-model deltas are passed through as they arrive (only the last 8 chars are held back for the safety filter
 and flushed at the end); fallback narration is sent in 3-char chunks paced by `STREAM_DELAY`.
 On `error` nothing is committed; resend the same body (or use retry below).
@@ -159,7 +169,14 @@ On `error` nothing is committed; resend the same body (or use retry below).
 `POST /api/worlds/{id}/assets/illustration` body `{ "turn_id"?: str, "prompt"?: str }` → `Asset` (cached by prompt hash)
 `POST /api/worlds/{id}/assets/tts` body `{ "text": str, "voice"?: str, "turn_id"?: str }` → `Asset` (cached)
 `POST /api/assets/{asset_id}/regenerate` → `Asset` (new file, bypasses cache)
-Auto: turns flagged `key_scene` (opening, chapter boundary, injected/major events) emit `asset` events for image + audio. Fallback: SVG illustration / silent WAV placeholder.
+`GET /api/assets/{asset_id}?wait=<s>` → `Asset` (v1.3). `wait` (0–8 s) long-polls while `status==="pending"` and returns as soon as it is upgraded.
+v1.3 deadlines: the illustration / tts / regenerate endpoints answer within ~8 s. If the real file is not ready, they return a placeholder
+(`source:"fallback"`, `status:"pending"`); generation continues in the background and upgrades **the same id** (`status:"ready"`,
+`source:"dashscope"`, `version+1`, new `url` — new file name plus `?v=version`, so browser caches are bypassed). Refresh signals:
+(1) `asset` events inside any open turn stream (see F2), (2) `GET /api/assets/{id}?wait=8`, (3) `GET /worlds/{id}/assets`. `status:"ready"` with
+`source:"fallback"` means the real generation failed and the placeholder is final.
+Auto: turns flagged `key_scene` (opening, chapter boundary, injected/major events) emit `asset` events for image + audio
+(v1.3: waits at most 10 s, then sends placeholders with `status:"pending"`; the same ids upgrade in place later). Fallback: SVG illustration / silent WAV placeholder.
 
 ### F6 Generative UI
 `GET /api/worlds/{id}/ui?components=status_panel,relationship_graph,inventory,map,event_feed,knowledge_cards` → `{ "components": UIComponent[], "ai_generated": true }`
@@ -225,3 +242,12 @@ If it is not ready in time, the response is the local summary with `status:"pend
 - BUG-007: non-streaming LLM calls have a total time limit (`SYNC_LLM_TIMEOUT_S`, default 8 s) and fall back locally; safety checks are capped at
   `GUARD_TIMEOUT_S` (6 s) and then use the rules-only layer; `/education/summary` adds `status`/`source` (async LLM version).
 - `layout.area` semantics for `event_feed` / `choice_list` (dedicated areas); `World.opening_options` documented.
+
+### v1.3 (2026-10-19, backend core) — additive
+- `Asset.status` (`pending`|`ready`), `Asset.version`, `Asset.updated_at`; upgraded urls change (new file + `?v=version`).
+- `GET /api/assets/{id}` (+ `?wait=` long-poll, max 8 s).
+- Illustration / tts / regenerate endpoints use an 8 s deadline (placeholder + background in-place upgrade); key-scene media waits ≤10 s;
+  opening image/audio placeholders appear ~1 s after confirm and upgrade in place.
+- Upgrade signal inside open turn streams: `asset` event with the same id, `status:"ready"` (also for this turn's key-scene assets).
+- Turn input safety fast path (`safety` + `done{blocked:true}` may now arrive after some `token`s); post-commit narration review.
+- Graceful shutdown waits ≤10 s for background asset upgrades.

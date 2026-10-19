@@ -75,3 +75,11 @@ def list_assets(world_id: str) -> list[Asset]
 - API.md v1.1 changelog lists contract changes (static path `/api/static/assets`, additive fields).
 - Install deps: `cd backend && uv pip install --python .venv/bin/python -r requirements.txt` (or `-e .`).
 - Backend core tests: `backend/.venv/bin/python -m pytest backend/tests/core -q`.
+- v1.3 取舍（后端核心，2026-10-19）：按用户方针以“稳定可用、体验流畅”为先，首字 ≤2s / 世界预览 5s 不再继续投入
+  （真实 key 实测：首字约 3.3–3.5s、预览约 3–7s，主要受百炼的限流和断流影响）。
+  已接入 safety 的 `check_input_fast`：规则层照旧同步拦截，后台复核命中就中止流并不提交；提交前最多等复核 3s，超时按规则层结果放行。
+  这样“拦截”可能在部分 token 之后才到，前端需要丢弃已显示的半段旁白（API.md v1.3）。
+  关键场景媒体最多等 10s，之后给占位；回合流不会为等升级在 done 之后继续挂着（否则前端会一直处于 streaming 状态、无法输入），
+  升级信号改为：仍在进行的回合流内推送，或用 `GET /api/assets/{id}?wait=8` 长轮询。
+  资产 version/updated_at 由 db.py 的 AssetRow before_update 监听维护（multimodal 原地升级改了 url/source 就 +1），不需要改 multimodal 的代码。
+

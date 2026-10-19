@@ -150,3 +150,37 @@ class ChunkFilter:
     def flush(self) -> str:
         out, self.buf = filter_chunk(self.buf, minor_mode=self.minor_mode), ""
         return out
+
+
+# ---------------------------------------------------------------- v1.3 并行快速路径（safety 同学的可选接口）
+async def check_input_fast(text: str, *, minor_mode: bool = False, rating: str = "teen", context: str = "turn",
+                           on_flag: Any = None) -> tuple[SafetyResult, Any]:
+    """规则层结果立即返回 + 可选的后台 LLM 复核任务（命中时回调 on_flag）。安全模块不提供/出错 → 退回完整 check_input。"""
+    fn = getattr(safety, "check_input_fast", None)
+    if fn is None:
+        return await check_input(text, minor_mode=minor_mode, rating=rating, context=context), None
+    try:
+        rule, review = await asyncio.wait_for(
+            fn(text, minor_mode=minor_mode, rating=rating, context=context, on_flag=on_flag),
+            timeout=get_settings_timeout())
+        return _coerce(rule), review
+    except Exception as e:  # noqa: BLE001 - 含超时
+        log.warning("check_input_fast failed (%s) → full check_input", type(e).__name__)
+        return await check_input(text, minor_mode=minor_mode, rating=rating, context=context), None
+
+
+def review_output(text: str, *, minor_mode: bool = False, rating: str = "teen", on_flag: Any = None) -> Any:
+    """生成文本的后台复核（命中 → on_flag(result)）。没有该接口/无需复核 → None。绝不抛异常。"""
+    fn = getattr(safety, "review_output", None)
+    if fn is None:
+        return None
+    try:
+        return fn(text, minor_mode=minor_mode, rating=rating, on_flag=on_flag)
+    except Exception as e:  # noqa: BLE001
+        log.warning("review_output failed: %s", type(e).__name__)
+        return None
+
+
+def get_settings_timeout() -> float:
+    from app.config import get_settings
+    return get_settings().guard_timeout_s

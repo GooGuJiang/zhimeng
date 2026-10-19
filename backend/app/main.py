@@ -36,6 +36,11 @@ async def lifespan(_: FastAPI):
     except Exception:  # noqa: BLE001
         logging.getLogger("zhimeng").exception("resume stale enrichment failed")
     yield
+    try:  # v1.3：优雅关闭时等后台资产升级落库（最多 10s），避免占位永远停在 pending
+        from app import multimodal
+        await multimodal.drain_background(10)
+    except Exception:  # noqa: BLE001
+        logging.getLogger("zhimeng").exception("drain multimodal background failed")
 
 
 settings = get_settings()

@@ -117,6 +117,26 @@ def delete_from_turn(world_id: str, turn: int) -> None:
             pass
 
 
+def redact_turn_memories(world_id: str, turn_id: str, safe_text: str) -> int:
+    """回合旁白被事后复核拦截：删除该回合派生的记忆（事件摘要/事实），留一条安全提示，避免后续检索引用到违规内容。"""
+    with session_scope() as s:
+        rows = [r for r in s.exec(select(MemoryRow).where(MemoryRow.world_id == world_id))
+                if (r.refs or {}).get("turn_id") == turn_id]
+        ids = [r.id for r in rows]
+        turn, chapter = (rows[0].turn, rows[0].chapter) if rows else (0, 1)
+        if ids:
+            s.exec(delete(MemoryRow).where(col(MemoryRow.id).in_(ids)))  # type: ignore[call-overload]
+            s.add(MemoryRow(id=f"m_{uuid.uuid4().hex[:12]}", world_id=world_id, content=safe_text[:200], kind="event",
+                            turn=turn, chapter=chapter, refs={"turn_id": turn_id, "redacted": True}))
+    for p in ("hash", "dashscope"):
+        try:
+            if ids:
+                _collection(p).delete(ids=ids)
+        except Exception:  # noqa: BLE001
+            pass
+    return len(ids)
+
+
 def delete_world(world_id: str) -> None:
     with session_scope() as s:
         s.exec(delete(MemoryRow).where(MemoryRow.world_id == world_id))  # type: ignore[call-overload]

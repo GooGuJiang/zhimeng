@@ -243,6 +243,10 @@ class Asset(BaseModel):
     prompt: str = ""
     source: str = "fallback"
     created_at: str = ""
+    # v1.3：pending = 占位中（后台生成完成后同 id 原地升级）；ready = 最终文件（含真实生成失败后保留的占位）
+    status: Literal["pending", "ready"] = "ready"
+    version: int = 1          # 每次原地升级 +1；>1 时 url 带 ?v=version
+    updated_at: str = ""
 
 
 class IllustrationRequest(BaseModel):

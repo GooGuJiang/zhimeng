@@ -127,6 +127,19 @@ class AssetRow(SQLModel, table=True):
     cache_key: str = Field(index=True)
     source: str = "fallback"
     created_at: datetime = Field(default_factory=utcnow)
+    # v1.3：原地升级（占位 → 真实文件、regenerate）时自动 +1 / 刷新（见下方 before_update 监听），前端据此刷新缓存
+    version: int = 1
+    updated_at: datetime | None = None
+
+
+@event.listens_for(AssetRow, "before_update")
+def _asset_bump(_mapper, _conn, target: AssetRow) -> None:  # noqa: ANN001
+    """资产行的 url/source 变化（multimodal 的后台原地升级或 regenerate）→ version+1、updated_at=now。"""
+    from sqlalchemy import inspect as sa_inspect
+    st = sa_inspect(target)
+    if st.attrs.url.history.has_changes() or st.attrs.source.history.has_changes():
+        target.version = (target.version or 1) + 1
+        target.updated_at = utcnow()
 
 
 class ReportRow(SQLModel, table=True):
@@ -162,7 +175,8 @@ def get_engine():
 
 
 # 轻量迁移：给旧库补新增列（SQLite create_all 不会改已有表）
-_MIGRATIONS = {"turns": [("source", "VARCHAR DEFAULT 'llm'")], "events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")]}
+_MIGRATIONS = {"turns": [("source", "VARCHAR DEFAULT 'llm'")],
+               "assets": [("version", "INTEGER DEFAULT 1"), ("updated_at", "DATETIME")], "events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")]}
 
 
 def _migrate(engine) -> None:  # noqa: ANN001
