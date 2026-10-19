@@ -40,11 +40,42 @@ def redact(text: object) -> str:
     return re.sub(r"sk-[A-Za-z0-9]{8,}", "sk-***", out)
 
 
+def images_disabled() -> bool:
+    """``ZM_DISABLE_IMAGE=1|true|yes`` → never call the image API (placeholder SVG only, cost saving).
+    Owned by backend ``config.py`` (``Settings.disable_image`` / ``image_enabled``); checked on every call so a
+    running background job stops too. getattr defaults keep older Settings versions working."""
+    s = get_settings()
+    return bool(getattr(s, "disable_image", False))
+
+
 class DashScopeError(RuntimeError):
-    def __init__(self, code: str, message: str = "", retryable: bool = False):
+    def __init__(self, code: str, message: str = "", retryable: bool = False, status: int | None = None):
         super().__init__(redact(f"{code}: {message[:200]}"))
         self.code = code
         self.retryable = retryable
+        self.status = status
+
+
+# Codes that mean "the network / transport failed", not "the content or request is wrong".
+NETWORK_CODES = {"DownloadFailed", "Timeout", "EmptyAudio"}
+
+
+def is_network_error(e: BaseException) -> bool:
+    """Network / transport / server-side failures (worth a delayed retry). 4xx content/request errors are not."""
+    if isinstance(e, (httpx.TransportError, asyncio.TimeoutError, TimeoutError, ConnectionError)):
+        return True
+    if isinstance(e, DashScopeError):
+        if e.code in NON_RETRYABLE:
+            return False
+        if e.status is not None:
+            return e.status >= 500
+        return e.code in NETWORK_CODES
+    return False
+
+
+def _guard_image() -> None:
+    if images_disabled():
+        raise DashScopeError("ImageDisabled", "ZM_DISABLE_IMAGE is set")
 
 
 NON_RETRYABLE = {"DataInspectionFailed", "IPInfringementSuspect", "InvalidApiKey", "InvalidParameter",
@@ -161,12 +192,14 @@ def _raise_for(resp: httpx.Response) -> dict[str, Any]:
     if resp.status_code >= 400 or data.get("code"):
         code = str(data.get("code") or f"HTTP{resp.status_code}")
         raise DashScopeError(code, str(data.get("message", "")),
-                             retryable=resp.status_code in (429, 500, 502, 503, 504) and code not in NON_RETRYABLE)
+                             retryable=resp.status_code in (429, 500, 502, 503, 504) and code not in NON_RETRYABLE,
+                             status=resp.status_code if resp.status_code >= 400 else None)
     return data
 
 
 async def create_image_task(prompt: str, negative_prompt: str = "",
                             size: str = "1280*720", model: str | None = None, seed: int | None = None) -> str:
+    _guard_image()
     s = get_settings()
     params: dict[str, Any] = {"size": size, "n": 1, "prompt_extend": False, "watermark": WATERMARK}
     if seed is not None:
@@ -190,6 +223,7 @@ async def poll_task(task_id: str, interval: float | None = None,
     timeout = POLL_TIMEOUT if timeout is None else timeout
     waited = 0.0
     while True:
+        _guard_image()  # switch flipped while a background job polls → stop sending requests
         try:
             r = await _request("GET", f"{s.dashscope_api_url}/tasks/{task_id}", headers=_headers())  # safe to retry
             data = _raise_for(r)
@@ -223,8 +257,10 @@ def image_url_from(output: dict[str, Any]) -> str:
 async def text_to_image(prompt: str, negative_prompt: str = "", size: str = "1280*720",
                         model: str | None = None, seed: int | None = None) -> bytes:
     """Full async-task flow: create → poll → download PNG bytes."""
+    _guard_image()
     task_id = await create_image_task(prompt, negative_prompt, size, model, seed)
     out = await poll_task(task_id)
+    _guard_image()
     return await _download(image_url_from(out))
 
 

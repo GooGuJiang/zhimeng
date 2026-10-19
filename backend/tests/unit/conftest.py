@@ -39,6 +39,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("ZM_FORCE_FALLBACK", "1")
     monkeypatch.setenv("ZM_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.delenv("ZM_DISABLE_IMAGE", raising=False)  # tests toggle settings.disable_image explicitly
+    monkeypatch.delenv("DISABLE_IMAGE", raising=False)
     _reset()
     from app.config import get_settings
 

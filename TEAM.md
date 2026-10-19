@@ -57,6 +57,7 @@ def list_assets(world_id: str) -> list[Asset]
 ## Data / env
 - `DASHSCOPE_API_KEY` is read only in `backend/app/config.py` (`Settings.dashscope_api_key`; env var or `backend/.env`).
 - `ZM_FORCE_FALLBACK=1` → no remote calls at all (tests use this). `ZM_DATA_DIR` → alternative data dir (tests use tmp dirs).
+- `ZM_DISABLE_IMAGE=1`（1/true/yes）→ 只返回占位插画 SVG（`source="fallback"`），不调用百炼生图，用于省费；配音与大模型不受影响。QA 跑真实模式测试时请设置它。读取方式见 `config.py` 的 `disable_image` / `image_enabled`；运行时状态见 `multimodal.status()`。
 
 ## QA / integration (engineer #4)
 - Start everything: `scripts/dev.sh` (backend :8000 via `backend/.venv` + `uvicorn app.main:app`, frontend :3000 via `pnpm exec next dev`). `--fallback` forces `ZM_FORCE_FALLBACK=1`. Reads root `.env` (auto-created from `.env.example`); an already-exported `DASHSCOPE_API_KEY` wins. **Backend: please keep the entrypoint at `backend/app/main.py:app`** and `GET /api/health` fast.

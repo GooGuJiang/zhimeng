@@ -576,3 +576,244 @@ def test_retry_backoff_is_exponential_and_bounded(remote, monkeypatch):
     with pytest.raises(httpx.ConnectError):
         run(ds._request("GET", "https://dashscope.aliyuncs.com/api/v1/tasks/x"))
     assert sleeps == [0.5, 1.0, 2.0][:ds.NET_RETRIES]
+
+
+# ---------- ZM_DISABLE_IMAGE (Settings.disable_image / image_enabled, owned by config.py) ----------
+def _count_requests(monkeypatch, base=None):
+    seen = install_transport(monkeypatch, base or _slow_image_handler({}, polls_before_done=1))
+    return seen
+
+
+def test_disable_image_env_parsed_by_config(env, monkeypatch):
+    from app.config import get_settings
+
+    for val, expected in [("1", True), ("true", True), ("yes", True), ("0", False), ("", False)]:
+        monkeypatch.setenv("ZM_DISABLE_IMAGE", val)
+        get_settings.cache_clear()
+        assert bool(getattr(get_settings(), "disable_image", False)) is expected
+    monkeypatch.delenv("ZM_DISABLE_IMAGE")
+    get_settings.cache_clear()
+
+
+def test_disable_image_no_remote_calls_cache_and_regen(remote, monkeypatch):
+    remote.disable_image = True
+    seen = _count_requests(monkeypatch)
+    a = run(multimodal.illustrate("w1", "外滩夜景"))
+    b = run(multimodal.illustrate("w1", "外滩夜景", deadline=0.0))
+    assert a.source == b.source == "fallback" and a.id == b.id and _file(remote, a).read_bytes().startswith(b"<svg")
+    r = run(multimodal.regenerate(a.id))
+    assert r.source == "fallback" and r.id != a.id
+    assert not any("image-synthesis" in str(q.url) or "/tasks/" in str(q.url) for q in seen) and seen == []
+    assert len([x for x in multimodal.list_assets("w1") if x.type == "image"]) == 2  # a + regenerate, no dupes
+    st = multimodal.status()
+    assert st["images"]["disabled_by_env"] and not st["images"]["enabled"]
+
+
+def test_disable_image_keeps_tts_remote(remote, monkeypatch):
+    remote.disable_image = True
+    install_transport(monkeypatch, _dashscope_handler({}))
+    assert run(multimodal.speak("w1", "夜色笼罩着外滩。")).source == "dashscope"
+    assert multimodal.status()["tts"]["enabled"]
+
+
+def test_disable_image_never_upgrades_existing_fallback_rows(remote, monkeypatch):
+    install_transport(monkeypatch, _slow_image_handler({}, polls_before_done=1))
+    real = run(multimodal.illustrate("w9", "外滩夜景"))  # a real file exists in another world
+    assert real.source == "dashscope"
+    remote.disable_image = True
+    seen = _count_requests(monkeypatch)
+    fb = run(multimodal.illustrate("w1", "外滩夜景"))
+    assert fb.source == "fallback" and seen == [], "no cross-world reuse / upgrade while the switch is on"
+    again = run(multimodal.illustrate("w1", "外滩夜景"))
+    assert again.id == fb.id and again.source == "fallback" and again.url == fb.url
+
+
+def test_disable_image_stops_running_background_job(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    monkeypatch.setattr(ds, "POLL_INTERVAL", 0.01)
+    after_flip: list[str] = []
+    state = {"polls": 0}
+
+    def handler(req):
+        u = str(req.url)
+        if remote.disable_image:
+            after_flip.append(u)
+        if u.endswith("/image-synthesis"):
+            return httpx.Response(200, json={"output": {"task_id": "task-1"}})
+        if u.endswith("/tasks/task-1"):
+            state["polls"] += 1
+            remote.disable_image = True  # switch turned on while the job is polling
+            return httpx.Response(200, json={"output": {"task_status": "RUNNING"}})
+        return httpx.Response(200, content=_png())
+
+    install_transport(monkeypatch, handler)
+
+    async def flow():
+        a = await multimodal.illustrate("w1", "外滩夜景", deadline=0.0)
+        await multimodal.drain_background(5)
+        return a
+
+    a = run(flow())
+    assert after_flip == [] and state["polls"] == 1
+    cur = multimodal.get_asset(a.id)
+    assert cur.source == "fallback" and not multimodal.is_pending(a.id)
+
+
+def test_force_fallback_and_disable_image_same_semantics(env):
+    env.disable_image = True  # with ZM_FORCE_FALLBACK too: cached placeholder, no dupes
+    a = run(multimodal.illustrate("w1", "外滩"))
+    assert run(multimodal.illustrate("w1", "外滩")).id == a.id and a.source == "fallback"
+
+
+# ---------- TTS: network failure → placeholder now, delayed background retry, same row upgraded ----------
+def _tts_handler(fail_times: int, err, counter: dict):
+    def handler(req):
+        u = str(req.url)
+        if u.endswith("/multimodal-generation/generation"):
+            counter["posts"] = counter.get("posts", 0) + 1
+            if counter["posts"] <= fail_times:
+                if isinstance(err, httpx.Response):
+                    return err
+                raise err
+            return httpx.Response(200, json={"output": {"audio": {"url": "https://oss.example/a.wav"}}})
+        return httpx.Response(200, content=_wav())
+    return handler
+
+
+def _row(asset_id):
+    from app.db import AssetRow, session_scope
+    with session_scope() as s:
+        return s.get(AssetRow, asset_id)
+
+
+@pytest.mark.parametrize("err", [httpx.ReadError("reset"), httpx.RemoteProtocolError("disconnected"),
+                                 httpx.ReadTimeout("slow"),
+                                 httpx.Response(503, json={"code": "ServiceUnavailable", "message": "x"})])
+def test_tts_network_error_background_retry_upgrades_same_row(remote, monkeypatch, err):
+    from app.multimodal import assets
+
+    monkeypatch.setattr(assets, "TTS_BG_DELAY", 0.01)
+    c: dict = {}
+    install_transport(monkeypatch, _tts_handler(1, err, c))
+
+    async def flow():
+        a = await multimodal.speak("w1", "夜色笼罩着外滩。")
+        assert a.source == "fallback" and multimodal.is_pending(a.id)
+        up = await multimodal.wait_for_asset(a.id, timeout=5)
+        return a, up
+
+    a, up = run(flow())
+    assert up.id == a.id and up.source == "dashscope" and up.url != a.url and c["posts"] == 2
+    assert not multimodal.is_pending(a.id)
+    assert len(multimodal.list_assets("w1")) == 1, "upgraded in place, no new row"
+    row = _row(a.id)
+    if hasattr(row, "version"):  # db.py before_update listener (ORM update, not delete/re-create)
+        assert row.version == 2 and row.updated_at is not None
+
+
+def test_tts_background_retry_is_bounded(remote, monkeypatch):
+    from app.multimodal import assets
+
+    monkeypatch.setattr(assets, "TTS_BG_DELAY", 0.01)
+    c: dict = {}
+    install_transport(monkeypatch, _tts_handler(99, httpx.ReadTimeout("slow"), c))
+
+    async def flow():
+        a = await multimodal.speak("w1", "外滩。")
+        await multimodal.drain_background(5)
+        return a
+
+    a = run(flow())
+    assert c["posts"] == 1 + assets.TTS_BG_RETRIES, "at most 1 + N POSTs even if each may have been billed"
+    assert multimodal.get_asset(a.id).source == "fallback" and not multimodal.is_pending(a.id)
+
+
+@pytest.mark.parametrize("resp", [
+    httpx.Response(400, json={"code": "DataInspectionFailed", "message": "bad"}),
+    httpx.Response(400, json={"code": "InvalidParameter", "message": "voice"}),
+    httpx.Response(429, json={"code": "Throttling", "message": "rate"}),
+])
+def test_tts_4xx_errors_are_not_retried(remote, monkeypatch, resp):
+    from app.multimodal import assets
+
+    monkeypatch.setattr(assets, "TTS_BG_DELAY", 0.01)
+    c: dict = {}
+    install_transport(monkeypatch, _tts_handler(99, resp, c))
+
+    async def flow():
+        a = await multimodal.speak("w1", "外滩。")
+        await multimodal.drain_background(5)
+        return a
+
+    a = run(flow())
+    assert c["posts"] == 1 and a.source == "fallback" and not multimodal.is_pending(a.id)
+
+
+def test_tts_deadline_then_network_failure_retries(remote, monkeypatch):
+    from app.multimodal import assets
+    from app.multimodal import dashscope_api as ds
+
+    monkeypatch.setattr(assets, "TTS_BG_DELAY", 0.01)
+    n = {"calls": 0}
+
+    async def flaky(text, voice, model=None, language_type="Chinese"):
+        n["calls"] += 1
+        await asyncio.sleep(0.05)
+        if n["calls"] == 1:
+            raise httpx.ReadError("dropped")
+        return _wav()
+
+    monkeypatch.setattr(ds, "text_to_speech", flaky)
+
+    async def flow():
+        a = await multimodal.speak("w1", "外滩。", deadline=0.0)
+        up = await multimodal.wait_for_asset(a.id, timeout=5)
+        return a, up
+
+    a, up = run(flow())
+    assert up.id == a.id and up.source == "dashscope" and n["calls"] == 2
+
+
+def test_tts_auto_audio_without_fallback_not_retried(remote, monkeypatch):
+    from app.multimodal import assets
+
+    c: dict = {}
+    install_transport(monkeypatch, _tts_handler(99, httpx.ReadError("x"), c))
+    res = run(assets.generate_tts("w1", "外滩。", speaker="narrator", allow_fallback=False))
+    assert res is None and c["posts"] == 1 and multimodal.list_assets("w1") == []
+
+
+def test_tts_bg_retry_stops_when_remote_disabled(remote, monkeypatch):
+    from app.multimodal import assets
+
+    monkeypatch.setattr(assets, "TTS_BG_DELAY", 0.05)
+    c: dict = {}
+    install_transport(monkeypatch, _tts_handler(1, httpx.ReadError("x"), c))
+
+    async def flow():
+        a = await multimodal.speak("w1", "外滩。")
+        remote.force_fallback = True  # e.g. ZM_FORCE_FALLBACK toggled → background retry must not call out
+        await multimodal.drain_background(5)
+        return a
+
+    a = run(flow())
+    assert c["posts"] == 1 and multimodal.get_asset(a.id).source == "fallback"
+
+
+def test_deadline_upgrade_bumps_version_via_orm_listener(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    monkeypatch.setattr(ds, "POLL_INTERVAL", 0.01)
+    install_transport(monkeypatch, _slow_image_handler({}, polls_before_done=3))
+
+    async def flow():
+        a = await multimodal.illustrate("w1", "外滩", deadline=0.0)
+        await multimodal.drain_background(5)
+        return a
+
+    a = run(flow())
+    row = _row(a.id)
+    assert row.source == "dashscope"
+    if hasattr(row, "version"):
+        assert row.version == 2 and row.updated_at is not None

@@ -43,12 +43,16 @@ TTS_ENABLED = os.getenv("ZM_TTS", "1").lower() not in {"0", "false", "no"}
 STYLE = "国风插画，电影感构图，细腻光影，叙事场景插图，高清"
 NEGATIVE = "文字，水印，签名，低画质，模糊，畸形手指，多余肢体，裸露，色情，血腥，恐怖内脏"
 
-RETRY_AFTER = float(os.getenv("ZM_MM_RETRY_AFTER", "60"))  # seconds before a failed prompt hits the API again
+RETRY_AFTER = float(os.getenv("ZM_MM_RETRY_AFTER", "60"))
+# TTS that fell back because of a network/transport error gets a delayed background retry (same row upgraded).
+# Bounded: a POST that may already have reached the server (read timeout …) can be billed at most 1+N times.
+TTS_BG_RETRIES = int(os.getenv("ZM_TTS_BG_RETRIES", "2"))
+TTS_BG_DELAY = float(os.getenv("ZM_TTS_BG_RETRY_DELAY", "4"))  # 4s, then 8s  # seconds before a failed prompt hits the API again
 _recent_fail: dict[str, float] = {}
 _sem: asyncio.Semaphore | None = None
 _inflight: dict[str, asyncio.Future] = {}
 STATS: dict[str, int] = {"image_calls": 0, "tts_calls": 0, "cache_hits": 0, "fallbacks": 0, "tts_chars": 0,
-                         "deferred": 0, "upgraded": 0}
+                         "deferred": 0, "upgraded": 0, "bg_retries": 0}
 
 
 def _semaphore() -> asyncio.Semaphore:
@@ -210,6 +214,8 @@ def _remote_ok(world_id: str, kind: str) -> bool:
     if not s.llm_enabled:  # no key or ZM_FORCE_FALLBACK=1 → zero remote calls
         return False
     if kind == "image":
+        if not getattr(s, "image_enabled", True) or ds.images_disabled():  # ZM_DISABLE_IMAGE (config.py)
+            return False
         return IMAGES_ENABLED and _count(world_id, "image") < MAX_IMAGES_PER_WORLD
     return TTS_ENABLED and _count(world_id, "audio") < MAX_TTS_PER_WORLD
 
@@ -280,7 +286,8 @@ async def _generate(kind: str, world_id: str, prompt: str, key: str, turn_id: st
             STATS["cache_hits"] += 1
             return to_asset(same)
         upgrade = same
-        if other:  # same content already generated for another world: reuse the file, no new bill
+        if other and not (kind == "image" and ds.images_disabled()):
+            # same content already generated for another world: reuse the file, no new bill
             STATS["cache_hits"] += 1
             return _persist(world_id, kind, other.url, prompt, key, "dashscope", turn_id, upgrade)
     if remote:
@@ -302,14 +309,20 @@ async def _generate(kind: str, world_id: str, prompt: str, key: str, turn_id: st
             else:
                 row_id = upgrade.id
             STATS["deferred"] += 1
-            _pending[(world_id, key)] = row_id
-            t = asyncio.ensure_future(_finish(kind, job, row_id, world_id, key, turn_id))
-            _bg_tasks.add(t)
-            t.add_done_callback(_bg_tasks.discard)
+            _schedule(_finish(kind, job, row_id, world_id, key, turn_id, produce), world_id, key, row_id)
             return get_asset(row_id)
         except Exception as e:  # noqa: BLE001 - any failure → placeholder
-            _recent_fail[key] = time.monotonic()
             log.warning("%s generation failed, using placeholder: %s: %s", kind, type(e).__name__, ds.redact(e))
+            if kind == "audio" and allow_fallback and TTS_BG_RETRIES > 0 and ds.is_network_error(e):
+                # network blip: serve the placeholder now, retry later in the background, upgrade this row
+                STATS["fallbacks"] += 1
+                row_id = upgrade.id if upgrade is not None else _save(
+                    world_id, kind, _url(_placeholder_file(kind, key, prompt, force)), prompt, key, "fallback",
+                    turn_id).id
+                _schedule(_retry_later(kind, produce, row_id, world_id, key, turn_id), world_id, key, row_id)
+                return get_asset(row_id)
+            if kind == "image" or not ds.is_network_error(e):  # audio network errors: retry soon, no cool-down
+                _recent_fail[key] = time.monotonic()
     STATS["fallbacks"] += 1
     if upgrade is not None:  # retry failed → keep serving the existing placeholder row, no new row
         return to_asset(upgrade)
@@ -319,19 +332,86 @@ async def _generate(kind: str, world_id: str, prompt: str, key: str, turn_id: st
     return _save(world_id, kind, _url(fname), prompt, key, "fallback", turn_id)
 
 
-async def _finish(kind: str, job: asyncio.Future, row_id: str, world_id: str, key: str, turn_id: str | None) -> None:
+def _schedule(coro, world_id: str, key: str, row_id: str) -> None:
+    _pending[(world_id, key)] = row_id
+    t = asyncio.ensure_future(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
+
+def _clear_pending(world_id: str, key: str, row_id: str) -> None:
+    if _pending.get((world_id, key)) == row_id:
+        _pending.pop((world_id, key), None)
+
+
+def _upgrade(kind: str, row_id: str, fname: str, key: str, turn_id: str | None) -> None:
+    """ORM update of the existing row (``session.get`` + attribute change) — never delete/re-create — so the
+    backend's ``before_update`` listener on AssetRow bumps ``version`` / ``updated_at``."""
+    _recent_fail.pop(key, None)
+    _update_row(row_id, _url(fname), "dashscope", turn_id)
+    STATS["upgraded"] += 1
+    log.info("background %s ready, asset %s upgraded in place", kind, row_id)
+
+
+async def _finish(kind: str, job: asyncio.Future, row_id: str, world_id: str, key: str, turn_id: str | None,
+                  produce=None) -> None:
+    """Deadline exceeded → wait for the in-flight job; on a network failure (audio) fall into delayed retries."""
     try:
         fname = await job
-        _recent_fail.pop(key, None)
-        _update_row(row_id, _url(fname), "dashscope", turn_id)
-        STATS["upgraded"] += 1
-        log.info("background %s ready, asset %s upgraded in place", kind, row_id)
     except Exception as e:  # noqa: BLE001
-        _recent_fail[key] = time.monotonic()
         log.warning("background %s failed, placeholder kept: %s: %s", kind, type(e).__name__, ds.redact(e))
+        if kind == "audio" and produce is not None and TTS_BG_RETRIES > 0 and ds.is_network_error(e):
+            await _retry_later(kind, produce, row_id, world_id, key, turn_id)  # clears pending itself
+            return
+        _recent_fail[key] = time.monotonic()
+        _clear_pending(world_id, key, row_id)
+        return
+    try:
+        _upgrade(kind, row_id, fname, key, turn_id)
     finally:
-        if _pending.get((world_id, key)) == row_id:
-            _pending.pop((world_id, key), None)
+        _clear_pending(world_id, key, row_id)
+
+
+async def _retry_later(kind: str, produce, row_id: str, world_id: str, key: str, turn_id: str | None) -> None:
+    """Up to TTS_BG_RETRIES delayed attempts (TTS_BG_DELAY × 1, 2, …). Stops on success, on a non-network error,
+    or when remote calls got disabled meanwhile. The placeholder row stays ``pending`` while this runs."""
+    try:
+        for i in range(TTS_BG_RETRIES):
+            await asyncio.sleep(TTS_BG_DELAY * (i + 1))
+            if not get_settings().llm_enabled:
+                break
+            STATS["bg_retries"] = STATS.get("bg_retries", 0) + 1
+            try:
+                fname = await produce()
+            except Exception as e:  # noqa: BLE001
+                log.warning("background %s retry %d failed: %s: %s", kind, i + 1, type(e).__name__, ds.redact(e))
+                if not ds.is_network_error(e):
+                    break
+                continue
+            _upgrade(kind, row_id, fname, key, turn_id)
+            return
+        _recent_fail[key] = time.monotonic()
+    finally:
+        _clear_pending(world_id, key, row_id)
+
+
+def status() -> dict[str, Any]:
+    """Runtime switches + counters (for /api/health or a debug endpoint)."""
+    s = get_settings()
+    return {"images": {"enabled": _remote_flag("image"), "disabled_by_env": ds.images_disabled(),
+                       "model": s.image_model, "size": IMAGE_SIZE},
+            "tts": {"enabled": _remote_flag("audio"), "model": ds.effective_tts_model(),
+                    "bg_retries": TTS_BG_RETRIES, "bg_retry_delay_s": TTS_BG_DELAY},
+            "pending": len(_pending), "stats": dict(STATS)}
+
+
+def _remote_flag(kind: str) -> bool:
+    s = get_settings()
+    if not s.llm_enabled:
+        return False
+    if kind == "image":
+        return bool(getattr(s, "image_enabled", True)) and not ds.images_disabled() and IMAGES_ENABLED
+    return TTS_ENABLED
 
 
 async def generate_illustration(world_id: str, prompt: str, turn_id: str | None = None,
