@@ -14,16 +14,13 @@ Output text is only "blocked" for hard-block / LLM-block verdicts; otherwise ove
 """
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import json
 import logging
 import os
-import time
-from collections import OrderedDict
 from typing import Any
 
 from app.safety import keywords as kw
+from app.safety import moderation as mod
 from app.safety.labels import AI_LABEL, RATING_LABELS, SAFETY_LABEL
 from app.schemas import SafetyResult
 
@@ -36,8 +33,10 @@ if MINOR_MAX_RATING not in RATING_ORDER:
     MINOR_MAX_RATING = "teen"
 LLM_INPUT_MODERATION = os.getenv("ZM_LLM_MODERATION", "1").lower() not in {"0", "false", "no"}
 LLM_OUTPUT_MODERATION = os.getenv("ZM_LLM_OUTPUT_MODERATION", "1").lower() not in {"0", "false", "no"}
-LLM_TIMEOUT = float(os.getenv("ZM_MODERATION_TIMEOUT", "8"))
-LLM_MIN_CHARS = 6  # very short inputs (e.g. "继续", option clicks) skip the LLM call
+LLM_MIN_CHARS = mod.MIN_CHARS  # very short inputs (e.g. "继续", option clicks) never call the LLM
+# ZM_LLM_OUTPUT_MODERATION_MODE: "suspicious" (default: only when the rule layer sees grey-zone features),
+# "always", or "off". use_llm=True on check_output forces a full LLM check (e.g. background audit).
+OUTPUT_MODE = os.getenv("ZM_LLM_OUTPUT_MODERATION_MODE", "suspicious" if LLM_OUTPUT_MODERATION else "off").lower()
 
 # Hotlines verified 2026-10-19 against official / first-party sources:
 # - 12356 全国统一心理援助热线: 国家卫生健康委《关于应用"12356"全国统一心理援助热线电话号码的通知》
@@ -81,11 +80,7 @@ MODERATION_PROMPT = """你是中文互动叙事游戏的内容安全审核员。
 {text}
 >>>"""
 
-RATE_LIMIT_COOLDOWN = float(os.getenv("ZM_MODERATION_COOLDOWN", "15"))  # seconds keyword-only after a 429
-_cooldown_until = 0.0
-_cache: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
-_CACHE_MAX = 2048
-STATS: dict[str, int] = {"checks": 0, "llm_calls": 0, "cache_hits": 0, "blocked": 0, "crisis": 0, "injection": 0}
+STATS: dict[str, int] = {"checks": 0, "llm_used": 0, "llm_skipped": 0, "blocked": 0, "crisis": 0, "injection": 0}
 
 
 def _norm_rating(r: str | None, default: str = "teen") -> str:
@@ -116,57 +111,23 @@ def ceiling(rating: str | None, minor_mode: bool) -> str:
     return min(r, MINOR_MAX_RATING, key=lambda x: RATING_ORDER[x]) if minor_mode else r
 
 
-async def llm_moderate(text: str, minor_mode: bool = False, kind: str = "玩家输入") -> dict[str, Any] | None:
-    """fast_model moderation via ``app.llm.client.chat_json`` → verdict dict, or None (no key / error / timeout).
-    Cached by text hash. Never raises."""
+async def llm_moderate(text: str, minor_mode: bool = False, kind: str = "玩家输入",
+                       context: str = "turn", timeout: float | None = None) -> dict[str, Any] | None:
+    """fast_model moderation via ``app.llm.client.chat_json`` → verdict dict, or None (no key / error / timeout /
+    rate-limit cool-down). Cached (LRU+TTL), single-flight, rate-controlled — see ``moderation.py``. Never raises."""
     from app.config import get_settings
-    from app.llm import client as llm
 
-    global _cooldown_until
     s = get_settings()
-    if not s.llm_enabled or time.monotonic() < _cooldown_until:
+    if not s.llm_enabled:
         return None
-    key = hashlib.sha256(f"{minor_mode}|{kind}|{text}".encode()).hexdigest()
-    if key in _cache:
-        STATS["cache_hits"] += 1
-        _cache.move_to_end(key)
-        return _cache[key]
     prompt = (MODERATION_PROMPT.replace("{kind}", kind).replace("{text}", text[:2000]).replace(
         "{minor}", "（当前为未成年人模式：恋爱、烟酒、赌博、血腥也需标记为 flag 或 block。）\n" if minor_mode else ""))
-    STATS["llm_calls"] += 1
-    errors_before = llm.STATS.get("errors", 0)
     try:
-        data = await asyncio.wait_for(
-            llm.chat_json([{"role": "user", "content": prompt}], model=s.fast_model, temperature=0, max_tokens=200),
-            timeout=LLM_TIMEOUT)
-    except Exception as e:  # noqa: BLE001 - timeout / unexpected → keyword-only
+        return await mod.moderate(text, prompt, minor_mode=minor_mode, kind=kind, context=context,
+                                  model=s.fast_model, timeout=timeout)
+    except Exception as e:  # noqa: BLE001
         log.info("moderation unavailable: %s", type(e).__name__)
         return None
-    if data is None:
-        # DashScope's own content inspection rejected the text → treat as block.
-        last = str(llm.STATS.get("last_error") or "").lower()
-        new_error = llm.STATS.get("errors", 0) > errors_before
-        if new_error and ("429" in last or "limit_requests" in last or "rate limit" in last or "throttl" in last):
-            _cooldown_until = time.monotonic() + RATE_LIMIT_COOLDOWN  # back off: keyword layer only for a while
-            return None
-        if new_error and ("data_inspection" in last or "inappropriate" in last):
-            return {"verdict": "block", "categories": ["provider_moderation"], "crisis": False,
-                    "rating": "mature", "reason": "平台内容安全拦截"}
-        return None
-    if not isinstance(data, dict) or "verdict" not in data:
-        return None
-    verdict_s = str(data.get("verdict", "allow")).lower()
-    verdict = {
-        "verdict": verdict_s if verdict_s in {"allow", "flag", "block"} else "allow",
-        "categories": [str(c) for c in (data.get("categories") or []) if c][:8],
-        "crisis": data.get("crisis") is True or str(data.get("crisis")).lower() == "true",
-        "rating": data.get("rating") if data.get("rating") in RATING_ORDER else "all",
-        "reason": str(data.get("reason", ""))[:200],
-    }
-    _cache[key] = verdict
-    if len(_cache) > _CACHE_MAX:
-        _cache.popitem(last=False)
-    return verdict
 
 
 def _crisis_result(rating: str = "all") -> SafetyResult:
@@ -205,11 +166,17 @@ async def check_input(text: str, *, minor_mode: bool = False, rating: str = "tee
     # teen-level keyword hints are noisy single chars (刀/血) → they raise the rating but never block input.
     # Source texts (课文/史料) may legitimately describe wars etc.: never rating-block them by keywords.
     block_rating = "mature" if found_rating == "mature" and context != "source_text" else "all"
-    do_llm = LLM_INPUT_MODERATION if use_llm is None else use_llm
+    cap = ceiling(rating, minor_mode)
+    if use_llm is None:
+        reasons = mod.triage(text, context=context, minor_mode=minor_mode, cap=cap, keyword_rating=found_rating)
+        do_llm = LLM_INPUT_MODERATION and bool(reasons)
+    else:
+        do_llm = use_llm
     if do_llm and len(kw.normalize(text)) >= LLM_MIN_CHARS:
+        STATS["llm_used"] += 1
         kind = {"source_text": "课文/史料原文", "world_prompt": "世界设定描述", "inject": "上帝视角插入的事件",
                 "memory_query": "玩家提问"}.get(context, "玩家行动")
-        v = await llm_moderate(text, minor_mode, kind)
+        v = await llm_moderate(text, minor_mode, kind, context=context)
         if v:
             categories = v["categories"]
             found_rating = _max_rating(found_rating, v["rating"])
@@ -220,9 +187,10 @@ async def check_input(text: str, *, minor_mode: bool = False, rating: str = "tee
                 msg = (INJECTION_MESSAGE if "injection" in categories else
                        MINOR_MESSAGE if minor_mode else BLOCK_MESSAGE)
                 return _blocked(categories or ["other"], found_rating, msg)
+    else:
+        STATS["llm_skipped"] += 1
     if not categories and kw.crisis_hint(text):
         categories = ["self_harm_hint"]  # e.g. "调查一起自杀案": allowed, but surfaced
-    cap = ceiling(rating, minor_mode)
     if RATING_ORDER[block_rating] > RATING_ORDER[cap]:
         return _blocked(categories or ["rating"], found_rating,
                         MINOR_MESSAGE if minor_mode else RATING_MESSAGE.format(rating=RATING_LABELS[cap]))
@@ -246,9 +214,20 @@ async def check_output(text: str, *, minor_mode: bool = False, rating: str = "te
         return SafetyResult(allowed=False, blocked=True, categories=sorted(hard), rating="mature",
                             message=OUTPUT_BLOCK_MESSAGE, filtered_text=SAFE_NOTICE)
     categories: list[str] = []
-    do_llm = LLM_OUTPUT_MODERATION if use_llm is None else use_llm
+    cap = ceiling(rating, minor_mode)
+    if use_llm is None:
+        if OUTPUT_MODE == "always":
+            do_llm = True
+        elif OUTPUT_MODE == "off":
+            do_llm = False
+        else:  # "suspicious": model output that the rule layer finds clean is not re-checked (latency / 429)
+            do_llm = bool(mod.triage(text, context="output", minor_mode=minor_mode, cap=cap,
+                                     keyword_rating=found_rating))
+    else:
+        do_llm = use_llm
     if do_llm and len(text) >= LLM_MIN_CHARS:
-        v = await llm_moderate(text, minor_mode, "AI生成的叙事文本")
+        STATS["llm_used"] += 1
+        v = await llm_moderate(text, minor_mode, "AI生成的叙事文本", context="output")
         if v:
             categories = v["categories"]
             found_rating = _max_rating(found_rating, v["rating"])
@@ -257,7 +236,6 @@ async def check_output(text: str, *, minor_mode: bool = False, rating: str = "te
                 return SafetyResult(allowed=False, blocked=True, categories=categories or ["other"],
                                     rating=found_rating, message=OUTPUT_BLOCK_MESSAGE,  # type: ignore[arg-type]
                                     filtered_text=SAFE_NOTICE)
-    cap = ceiling(rating, minor_mode)
     to_mask: list[str] = []
     if minor_mode:
         to_mask += [w for ws in kw.find(text, kw.MINOR_BLOCK).values() for w in ws]
@@ -308,6 +286,7 @@ def policy() -> dict[str, Any]:
         "output_filter": ["违规关键词拦截", "大模型审核", "超出分级词汇遮蔽", "流式输出实时遮蔽", "AI生成标识"],
         "crisis_message": CRISIS_MESSAGE,
         "hotlines": HOTLINES,
+        "moderation": {**mod.describe(), "output_mode": OUTPUT_MODE, "input_llm_enabled": LLM_INPUT_MODERATION},
         "report": {"endpoint": "/api/reports", "description": "对任意生成内容可一键举报，人工复核"},
         "ai_label": AI_LABEL,
         "safety_label": SAFETY_LABEL,

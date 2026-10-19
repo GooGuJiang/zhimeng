@@ -35,27 +35,34 @@ def _emergency(world_id: str, kind: str, prompt: str, turn_id: str | None) -> As
 
 
 async def illustrate(world_id: str, prompt: str, *, turn_id: str | None = None, style: str | None = None,
-                     force: bool = False, minor_mode: bool = False) -> Asset:
-    """Create (or reuse cached) illustration for a scene prompt. Never raises."""
+                     force: bool = False, minor_mode: bool = False, deadline: float | None = None) -> Asset:
+    """Create (or reuse cached) illustration for a scene prompt. Never raises.
+
+    ``deadline`` (seconds, optional): if the real image is not ready in time, return a placeholder Asset
+    (``source="fallback"``) immediately; generation continues in the background and then upgrades the SAME
+    row in place (same id, ``source="dashscope"``, new url). Poll ``get_asset(id)`` / ``list_assets`` or use
+    ``wait_for_asset``; ``is_pending(id)`` tells whether an upgrade is still running."""
     full = f"{style}。{prompt}" if style else (prompt or "")
     try:
-        return await _a.generate_illustration(world_id, full, turn_id=turn_id, force=force, minor_mode=minor_mode)
+        return await _a.generate_illustration(world_id, full, turn_id=turn_id, force=force, minor_mode=minor_mode,
+                                              deadline=deadline)
     except Exception as e:  # noqa: BLE001
         log.error("illustrate failed even in fallback: %s", type(e).__name__)
         return _emergency(world_id, "image", full, turn_id)
 
 
 async def speak(world_id: str, text: str, *, voice: str | None = None, turn_id: str | None = None,
-                force: bool = False, speaker: str | dict[str, Any] | None = None) -> Asset:
+                force: bool = False, speaker: str | dict[str, Any] | None = None,
+                deadline: float | None = None) -> Asset:
     """Create (or reuse cached) narration / NPC audio (wav). ``voice`` = a Qwen-TTS voice id, ``"narrator"``,
     or a character name (→ stable NPC voice); ``speaker`` = a Character dict (gender-aware casting).
     Fallback = silent WAV with ``source="fallback"`` (frontend may use Web Speech with ``asset.prompt``).
-    Never raises."""
+    ``deadline`` as in ``illustrate`` (placeholder now, same row upgraded later). Never raises."""
     if voice and voice not in ALL_VOICES and speaker is None:
         speaker, voice = voice, None
     try:
         a = await _a.generate_tts(world_id, text or "……", voice=voice, turn_id=turn_id,
-                                  speaker=speaker or "narrator", force=force, allow_fallback=True)
+                                  speaker=speaker or "narrator", force=force, allow_fallback=True, deadline=deadline)
         if a is not None:
             return a
     except Exception as e:  # noqa: BLE001
@@ -63,10 +70,10 @@ async def speak(world_id: str, text: str, *, voice: str | None = None, turn_id: 
     return _emergency(world_id, "audio", text or "", turn_id)
 
 
-async def regenerate(asset_id: str) -> Asset | None:
+async def regenerate(asset_id: str, *, deadline: float | None = None) -> Asset | None:
     """Same type/prompt (and voice), bypass cache, new file. ``None`` if the asset id is unknown."""
     try:
-        return await _a.regenerate_asset(asset_id)
+        return await _a.regenerate_asset(asset_id, deadline=deadline)
     except Exception as e:  # noqa: BLE001
         log.error("regenerate failed: %s", type(e).__name__)
         return None

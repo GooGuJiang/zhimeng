@@ -378,3 +378,201 @@ def test_fix_wav_header():
     with wave.open(BytesIO(fixed)) as w:
         assert w.getnframes() == 2400
     assert fix_wav_header(b"junk") == b"junk"
+
+
+# ---------- deadline: placeholder now, same row upgraded in the background ----------
+def _slow_image_handler(state, polls_before_done=5, fail=False):
+    def handler(req: httpx.Request) -> httpx.Response:
+        u = str(req.url)
+        if u.endswith("/image-synthesis"):
+            state["creates"] = state.get("creates", 0) + 1
+            return httpx.Response(200, json={"output": {"task_id": "task-1"}})
+        if u.endswith("/tasks/task-1"):
+            state["polls"] = state.get("polls", 0) + 1
+            if state["polls"] < polls_before_done:
+                return httpx.Response(200, json={"output": {"task_status": "RUNNING"}})
+            if fail:
+                return httpx.Response(200, json={"output": {"task_status": "FAILED", "code": "X"}})
+            return httpx.Response(200, json={"output": {"task_status": "SUCCEEDED",
+                                                        "results": [{"url": "https://oss.example/img.png"}]}})
+        if u.endswith("/multimodal-generation/generation"):
+            return httpx.Response(200, json={"output": {"audio": {"url": "https://oss.example/a.wav"}}})
+        if u.endswith("a.wav"):
+            return httpx.Response(200, content=_wav())
+        return httpx.Response(200, content=_png())
+    return handler
+
+
+def test_deadline_returns_placeholder_then_upgrades_same_row(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    monkeypatch.setattr(ds, "POLL_INTERVAL", 0.02)
+    state: dict = {}
+    install_transport(monkeypatch, _slow_image_handler(state, polls_before_done=6))
+
+    async def flow():
+        a = await multimodal.illustrate("w1", "外滩夜景", deadline=0.01)
+        assert a.source == "fallback" and multimodal.is_pending(a.id) and a.id in multimodal.pending_ids()
+        assert _file(remote, a).read_bytes().startswith(b"<svg")
+        b = await multimodal.illustrate("w1", "外滩夜景", deadline=0.01)  # same request while pending
+        assert b.id == a.id and state["creates"] == 1, "no second provider task while pending"
+        up = await multimodal.wait_for_asset(a.id, timeout=5)
+        return a, up
+
+    a, up = run(flow())
+    assert up.id == a.id and up.source == "dashscope" and up.url != a.url and up.url.endswith(".png")
+    assert not multimodal.is_pending(a.id)
+    assert [x.id for x in multimodal.list_assets("w1")] == [a.id], "upgraded in place, no extra row"
+    assert multimodal.get_asset(a.id).source == "dashscope"
+
+
+def test_deadline_not_hit_returns_real_asset(remote, monkeypatch):
+    install_transport(monkeypatch, _slow_image_handler({}, polls_before_done=1))
+    a = run(multimodal.illustrate("w1", "外滩夜景", deadline=5))
+    assert a.source == "dashscope"
+
+
+def test_deadline_speak_and_regenerate(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    async def slow_tts(text, voice, model=None, language_type="Chinese"):
+        await asyncio.sleep(0.1)
+        return _wav()
+
+    monkeypatch.setattr(ds, "text_to_speech", slow_tts)
+
+    async def flow():
+        a = await multimodal.speak("w1", "夜色笼罩着外滩。", deadline=0.01)
+        assert a.source == "fallback"
+        await multimodal.drain_background(5)
+        up = multimodal.get_asset(a.id)
+        r = await multimodal.regenerate(a.id, deadline=0.01)
+        assert r.id != a.id and r.source == "fallback"
+        await multimodal.drain_background(5)
+        return a, up, multimodal.get_asset(r.id)
+
+    a, up, r = run(flow())
+    assert up.id == a.id and up.source == "dashscope"
+    assert r.source == "dashscope" and r.url != up.url
+
+
+def test_deadline_background_failure_keeps_placeholder(remote, monkeypatch, caplog):
+    install_transport(monkeypatch, _slow_image_handler({}, polls_before_done=3, fail=True))
+
+    async def flow():
+        a = await multimodal.illustrate("w1", "外滩夜景", deadline=0.0)
+        await multimodal.drain_background(5)
+        return a
+
+    a = run(flow())
+    cur = multimodal.get_asset(a.id)
+    assert cur.source == "fallback" and cur.url == a.url and not multimodal.is_pending(a.id)
+    assert FAKE_KEY not in caplog.text
+
+
+def test_no_deadline_is_backward_compatible(remote, monkeypatch):
+    install_transport(monkeypatch, _slow_image_handler({}, polls_before_done=3))
+    assert run(multimodal.illustrate("w1", "外滩夜景")).source == "dashscope"
+
+
+# ---------- network robustness ----------
+def test_fresh_connection_per_request_no_keepalive(remote, monkeypatch):
+    seen = install_transport(monkeypatch, _slow_image_handler({}, polls_before_done=3))
+    made = []
+    factory = httpx.AsyncClient
+
+    def spy(*a, **kw):
+        made.append(kw)
+        return factory(*a, **kw)
+
+    monkeypatch.setattr(httpx, "AsyncClient", spy)
+    assert run(multimodal.illustrate("w1", "外滩")).source == "dashscope"
+    assert len(made) == len(seen) >= 5, "one client per request (no pooled long-lived connection)"
+    assert all(k["limits"].max_keepalive_connections == 0 for k in made)
+    assert all(r.headers.get("connection") == "close" for r in seen)
+
+
+def test_poll_get_retried_on_read_errors(remote, monkeypatch):
+    state = {"broken": 0}
+    base = _slow_image_handler({}, polls_before_done=2)
+
+    def handler(req):
+        if str(req.url).endswith("/tasks/task-1") and state["broken"] < 2:
+            state["broken"] += 1
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        if str(req.url).endswith("img.png") and state["broken"] < 3:
+            state["broken"] += 1
+            raise httpx.ReadError("connection reset")
+        return base(req)
+
+    install_transport(monkeypatch, handler)
+    assert run(multimodal.illustrate("w1", "外滩")).source == "dashscope" and state["broken"] == 3
+
+
+def test_poll_tolerates_transient_429(remote, monkeypatch):
+    n = {"p": 0}
+    base = _slow_image_handler({}, polls_before_done=1)
+
+    def handler(req):
+        if str(req.url).endswith("/tasks/task-1") and n["p"] < 2:
+            n["p"] += 1
+            return httpx.Response(429, json={"code": "Throttling", "message": "rate"})
+        return base(req)
+
+    install_transport(monkeypatch, handler)
+    assert run(multimodal.illustrate("w1", "外滩")).source == "dashscope"
+
+
+@pytest.mark.parametrize("err,expected_posts,source", [
+    (httpx.ReadError("reset after send"), 1, "fallback"),      # may have been received → never re-POST (billing)
+    (httpx.RemoteProtocolError("disconnected"), 1, "fallback"),
+    (httpx.ReadTimeout("slow"), 1, "fallback"),
+    (httpx.ConnectError("refused"), 2, "dashscope"),           # provably not sent → safe to retry
+])
+def test_billed_post_retried_only_when_not_sent(remote, monkeypatch, err, expected_posts, source):
+    state = {"posts": 0}
+    base = _slow_image_handler({}, polls_before_done=1)
+
+    def handler(req):
+        if str(req.url).endswith("/image-synthesis"):
+            state["posts"] += 1
+            if state["posts"] == 1:
+                raise err
+        return base(req)
+
+    install_transport(monkeypatch, handler)
+    a = run(multimodal.illustrate("w1", "外滩"))
+    assert state["posts"] == expected_posts and a.source == source
+
+
+def test_tts_post_not_resent_after_read_error(remote, monkeypatch):
+    posts = {"n": 0}
+
+    def handler(req):
+        if str(req.url).endswith("/multimodal-generation/generation"):
+            posts["n"] += 1
+            raise httpx.ReadError("reset")
+        return httpx.Response(200, content=_wav())
+
+    install_transport(monkeypatch, handler)
+    assert run(multimodal.speak("w1", "外滩。")).source == "fallback" and posts["n"] == 1
+
+
+def test_retry_backoff_is_exponential_and_bounded(remote, monkeypatch):
+    from app.multimodal import dashscope_api as ds
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(d):
+        sleeps.append(d)
+
+    monkeypatch.setattr(ds, "BACKOFF_BASE", 0.5)
+    monkeypatch.setattr(ds.asyncio, "sleep", fake_sleep)
+
+    def handler(req):
+        raise httpx.ConnectError("down")
+
+    install_transport(monkeypatch, handler)
+    with pytest.raises(httpx.ConnectError):
+        run(ds._request("GET", "https://dashscope.aliyuncs.com/api/v1/tasks/x"))
+    assert sleeps == [0.5, 1.0, 2.0][:ds.NET_RETRIES]

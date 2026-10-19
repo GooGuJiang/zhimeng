@@ -69,26 +69,52 @@ def _model_missing(e: Exception) -> bool:
 
 
 CONNECT_TIMEOUT = float(os.getenv("ZM_MM_CONNECT_TIMEOUT", "10"))
-CONNECT_RETRIES = int(os.getenv("ZM_MM_CONNECT_RETRIES", "2"))
+READ_TIMEOUT = float(os.getenv("ZM_MM_READ_TIMEOUT", "30"))
+NET_RETRIES = int(os.getenv("ZM_MM_NET_RETRIES", os.getenv("ZM_MM_CONNECT_RETRIES", "3")))
+BACKOFF_BASE = float(os.getenv("ZM_MM_BACKOFF_BASE", "0.5"))  # 0.5s → 1s → 2s … (capped at 8s)
+
+# "Not sent" errors: the request never reached the server → retrying a billing POST cannot double-charge.
+_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+# Any transport error (incl. ReadError / RemoteProtocolError / ReadTimeout / server silently closed the socket)
+# is fine to retry for idempotent GETs (task polling, result download).
+_TRANSPORT = (httpx.TransportError,)
 
 
 def _client() -> httpx.AsyncClient:
+    """A fresh client per request, keep-alive disabled: long-lived connections from this box to DashScope are
+    often dropped after a few seconds or closed silently, so we never reuse a pooled connection."""
     s = get_settings()
-    return httpx.AsyncClient(timeout=httpx.Timeout(s.llm_timeout, connect=CONNECT_TIMEOUT))
+    return httpx.AsyncClient(timeout=httpx.Timeout(max(READ_TIMEOUT, min(s.llm_timeout, 120.0)), connect=CONNECT_TIMEOUT),
+                             limits=httpx.Limits(max_keepalive_connections=0, keepalive_expiry=0),
+                             headers={"Connection": "close"})
 
 
-async def _request(client: httpx.AsyncClient, method: str, url: str, **kw: Any) -> httpx.Response:
-    """Send with retries on *connection* failures only (request never reached the server → not billed,
-    safe to repeat). Read timeouts / HTTP errors are not retried here."""
-    for attempt in range(CONNECT_RETRIES + 1):
+async def _request(method: str, url: str, *, idempotent: bool | None = None, **kw: Any) -> httpx.Response:
+    """One request on a fresh connection, with bounded exponential-backoff retries.
+
+    ``idempotent`` (default: GET) → retry on any transport error; otherwise (task-creating / billed POSTs) retry
+    only when the request provably was not sent (connect errors). HTTP status errors are never retried here.
+    """
+    idem = (method.upper() == "GET") if idempotent is None else idempotent
+    retry_on = _TRANSPORT if idem else _NOT_SENT
+    for attempt in range(NET_RETRIES + 1):
         try:
-            return await client.request(method, url, **kw)
-        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-            if attempt >= CONNECT_RETRIES:
+            async with _client() as client:
+                r = await client.request(method, url, **kw)
+                await r.aread()
+                return r
+        except retry_on as e:
+            if attempt >= NET_RETRIES:
                 raise
-            log.info("connect failed (%s), retry %d", type(e).__name__, attempt + 1)
-            await asyncio.sleep(0.5 * (attempt + 1))
+            STATS["net_retries"] += 1
+            delay = min(8.0, BACKOFF_BASE * (2 ** attempt))
+            log.info("%s %s network error (%s), retry %d in %.1fs", method, httpx.URL(url).host,
+                     type(e).__name__, attempt + 1, delay)
+            await asyncio.sleep(delay)
     raise AssertionError("unreachable")
+
+
+STATS: dict[str, int] = {"net_retries": 0}
 
 
 def _https_first(url: str) -> list[str]:
@@ -100,11 +126,11 @@ def _https_first(url: str) -> list[str]:
     return [url]
 
 
-async def _download(client: httpx.AsyncClient, url: str) -> bytes:
+async def _download(url: str) -> bytes:
     last: Exception | None = None
     for candidate in _https_first(url):
         try:
-            r = await _request(client, "GET", candidate)  # result URLs: never send the Authorization header
+            r = await _request("GET", candidate)  # result URLs: never send the Authorization header
             r.raise_for_status()
             return r.content
         except (httpx.HTTPError,) as e:
@@ -113,8 +139,8 @@ async def _download(client: httpx.AsyncClient, url: str) -> bytes:
 
 
 # Overridable for tests (avoid real sleeps).
-POLL_INTERVAL = 2.0
-POLL_TIMEOUT = 90.0
+POLL_INTERVAL = float(os.getenv("ZM_MM_POLL_INTERVAL", "2"))
+POLL_TIMEOUT = float(os.getenv("ZM_MM_POLL_TIMEOUT", "120"))
 
 
 def _headers(async_task: bool = False) -> dict[str, str]:
@@ -139,7 +165,7 @@ def _raise_for(resp: httpx.Response) -> dict[str, Any]:
     return data
 
 
-async def create_image_task(client: httpx.AsyncClient, prompt: str, negative_prompt: str = "",
+async def create_image_task(prompt: str, negative_prompt: str = "",
                             size: str = "1280*720", model: str | None = None, seed: int | None = None) -> str:
     s = get_settings()
     params: dict[str, Any] = {"size": size, "n": 1, "prompt_extend": False, "watermark": WATERMARK}
@@ -148,8 +174,8 @@ async def create_image_task(client: httpx.AsyncClient, prompt: str, negative_pro
     body = {"model": model or s.image_model,
             "input": {"prompt": prompt[:500], "negative_prompt": negative_prompt[:500]},
             "parameters": params}
-    r = await _request(client, "POST", f"{s.dashscope_api_url}/services/aigc/text2image/image-synthesis",
-                       headers=_headers(async_task=True), json=body)
+    r = await _request("POST", f"{s.dashscope_api_url}/services/aigc/text2image/image-synthesis",
+                       headers=_headers(async_task=True), json=body)  # billed: retried only if not sent
     data = _raise_for(r)
     task_id = (data.get("output") or {}).get("task_id")
     if not task_id:
@@ -157,15 +183,20 @@ async def create_image_task(client: httpx.AsyncClient, prompt: str, negative_pro
     return task_id
 
 
-async def poll_task(client: httpx.AsyncClient, task_id: str, interval: float | None = None,
+async def poll_task(task_id: str, interval: float | None = None,
                     timeout: float | None = None) -> dict[str, Any]:
     s = get_settings()
     interval = POLL_INTERVAL if interval is None else interval
     timeout = POLL_TIMEOUT if timeout is None else timeout
     waited = 0.0
     while True:
-        r = await _request(client, "GET", f"{s.dashscope_api_url}/tasks/{task_id}", headers=_headers())
-        data = _raise_for(r)
+        try:
+            r = await _request("GET", f"{s.dashscope_api_url}/tasks/{task_id}", headers=_headers())  # safe to retry
+            data = _raise_for(r)
+        except DashScopeError as e:
+            if not e.retryable or waited >= timeout:  # 429/5xx while polling: keep polling the same task
+                raise
+            data = {"output": {"task_status": "RETRY"}}
         out = data.get("output") or {}
         status = out.get("task_status")
         if status == "SUCCEEDED":
@@ -192,11 +223,9 @@ def image_url_from(output: dict[str, Any]) -> str:
 async def text_to_image(prompt: str, negative_prompt: str = "", size: str = "1280*720",
                         model: str | None = None, seed: int | None = None) -> bytes:
     """Full async-task flow: create → poll → download PNG bytes."""
-    async with _client() as client:
-        task_id = await create_image_task(client, prompt, negative_prompt, size, model, seed)
-        out = await poll_task(client, task_id)
-        url = image_url_from(out)
-        return await _download(client, url)
+    task_id = await create_image_task(prompt, negative_prompt, size, model, seed)
+    out = await poll_task(task_id)
+    return await _download(image_url_from(out))
 
 
 async def text_to_speech(text: str, voice: str, model: str | None = None,
@@ -218,14 +247,13 @@ async def text_to_speech(text: str, voice: str, model: str | None = None,
 async def _tts_once(text: str, voice: str, model: str, language_type: str) -> bytes:
     s = get_settings()
     body = {"model": model, "input": {"text": text[:600], "voice": voice, "language_type": language_type}}
-    async with _client() as client:
-        r = await _request(client, "POST", f"{s.dashscope_api_url}/services/aigc/multimodal-generation/generation",
-                           headers=_headers(), json=body)
-        data = _raise_for(r)
-        audio = (data.get("output") or {}).get("audio") or {}
-        if audio.get("url"):
-            return await _download(client, audio["url"])
-        if audio.get("data"):
-            import base64
-            return base64.b64decode(audio["data"])
-        raise DashScopeError("NoAudio", "tts returned no audio")
+    r = await _request("POST", f"{s.dashscope_api_url}/services/aigc/multimodal-generation/generation",
+                       headers=_headers(), json=body)  # billed: retried only if not sent
+    data = _raise_for(r)
+    audio = (data.get("output") or {}).get("audio") or {}
+    if audio.get("url"):
+        return await _download(audio["url"])
+    if audio.get("data"):
+        import base64
+        return base64.b64decode(audio["data"])
+    raise DashScopeError("NoAudio", "tts returned no audio")

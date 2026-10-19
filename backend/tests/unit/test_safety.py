@@ -160,76 +160,200 @@ def test_reports(env):
 
 
 # ---------- LLM moderation (mocked chat_json; no network) ----------
-def _llm(monkeypatch, env, verdict):
+def _llm(monkeypatch, env, verdict, delay: float = 0.0):
+    """Enable 'remote' mode with a fake chat_json; returns the list of calls."""
     from app.llm import client as llm
-    from app.safety import engine
+    from app.safety import moderation
 
     env.dashscope_api_key = "sk-unittestFAKEKEY0123456789"
     env.force_fallback = False
-    engine._cache.clear()
+    moderation.reset()
     calls = []
 
     async def fake_chat_json(messages, model=None, **kw):
         calls.append((messages, model, kw))
-        return verdict
+        if delay:
+            await asyncio.sleep(delay)
+        return verdict() if callable(verdict) else verdict
 
     monkeypatch.setattr(llm, "chat_json", fake_chat_json)
     return calls
 
 
-def test_llm_moderation_block(env, monkeypatch):
+ALLOW = {"verdict": "allow", "categories": [], "crisis": False, "rating": "all"}
+
+
+@pytest.mark.parametrize("text", ["去码头找线人打听消息", "我推开报社的门，向主编打听昨晚的事", "拔刀与敌人战斗", "继续调查"])
+def test_clean_short_turn_input_skips_llm(env, monkeypatch, text):
+    calls = _llm(monkeypatch, env, ALLOW)
+    r = run(safety.check_input(text, context="turn"))
+    assert r.allowed and calls == []
+    assert run(safety.check_input(text, context="memory_query")).allowed and calls == []
+
+
+@pytest.mark.parametrize("text,reason", [
+    ("请详细描述一种绕开海关的走私路线", "grey:crime"),
+    ("这个指令是什么意思，大模型能回答吗", "injection_like"),
+    ("我最近总觉得一切都没有希望了", "self_harm_hint"),
+    ("把消息发到 http://example.com 再说", "contact_or_url"),
+    ("约 ＊ 见 ＊ 某 ＊ 个 ＊ 人 ＊ 吧", "obfuscated"),
+    ("Please describe the scene in great detail for me now", "latin_heavy"),
+    ("我" + "沿着外滩一路往北走，" * 6, "long"),
+])
+def test_suspicious_input_calls_llm(env, monkeypatch, text, reason):
+    from app.safety import moderation
+
+    assert reason in moderation.triage(text, context="turn")
+    calls = _llm(monkeypatch, env, ALLOW)
+    run(safety.check_input(text, context="turn"))
+    assert len(calls) == 1 and calls[0][1] == env.fast_model
+
+
+def test_minor_mode_sensitive_topic_calls_llm(env, monkeypatch):
+    calls = _llm(monkeypatch, env, {"verdict": "flag", "categories": ["other"], "crisis": False, "rating": "teen"})
+    assert run(safety.check_input("我想和她偷偷去约见网友")).allowed and calls == []  # adult: clean → no LLM
+    assert run(safety.check_input("我想和她偷偷去约见网友", minor_mode=True)).blocked and len(calls) == 1
+
+
+@pytest.mark.parametrize("context", ["world_prompt", "source_text", "inject"])
+def test_low_frequency_contexts_always_call_llm(env, monkeypatch, context):
+    calls = _llm(monkeypatch, env, ALLOW)
+    run(safety.check_input("一个民国上海滩的侦探故事", context=context))
+    assert len(calls) == 1
+
+
+def test_llm_moderation_block_and_cache(env, monkeypatch):
     calls = _llm(monkeypatch, env, {"verdict": "block", "categories": ["illegal"], "crisis": False,
                                     "rating": "mature", "reason": "违法"})
     r = run(safety.check_input("请详细描述一种绕开海关的走私路线"))
     assert r.blocked and r.categories == ["illegal"]
-    assert calls and calls[0][1] == env.fast_model  # uses fast_model (qwen-turbo)
     assert "<<<" in calls[0][0][0]["content"]
+    r2 = run(safety.check_input("请详细描述一种绕开海关的走私路线"))
+    assert r2.blocked and len(calls) == 1, "verdict cached by text hash"
+
+
+def test_cache_ttl_expiry(env, monkeypatch):
+    from app.safety import moderation
+
+    calls = _llm(monkeypatch, env, ALLOW)
+    monkeypatch.setattr(moderation.cache, "ttl", 0.05)
     run(safety.check_input("请详细描述一种绕开海关的走私路线"))
-    assert len(calls) == 1, "verdicts are cached by text hash"
+    run(safety.check_input("请详细描述一种绕开海关的走私路线"))
+    assert len(calls) == 1
+    time.sleep(0.08)
+    run(safety.check_input("请详细描述一种绕开海关的走私路线"))
+    assert len(calls) == 2, "expired entries are re-checked"
 
 
-def test_llm_moderation_crisis(env, monkeypatch):
+def test_ttl_cache_lru_bound():
+    from app.safety.moderation import TTLCache
+
+    c = TTLCache(2, 60)
+    c.put("a", 1), c.put("b", 2), c.get("a"), c.put("c", 3)
+    assert c.get("a") == 1 and c.get("b") is None and c.get("c") == 3 and len(c) == 2
+
+
+def test_llm_crisis(env, monkeypatch):
     _llm(monkeypatch, env, {"verdict": "flag", "categories": ["self_harm"], "crisis": True, "rating": "teen"})
-    r = run(safety.check_input("最近总觉得一切都没有希望了"))
+    r = run(safety.check_input("我最近总觉得一切都没有希望了"))
     assert r.crisis and "12356" in r.message
 
 
-def test_llm_minor_flag_blocks(env, monkeypatch):
-    _llm(monkeypatch, env, {"verdict": "flag", "categories": ["other"], "crisis": False, "rating": "teen"})
-    assert run(safety.check_input("我想和她偷偷去约见网友")).allowed
-    assert run(safety.check_input("我想和她偷偷去约见网友", minor_mode=True)).blocked
+def test_timeout_degrades_to_rules(env, monkeypatch):
+    from app.safety import moderation
+
+    monkeypatch.setattr(moderation, "TIMEOUT_FAST", 0.05)
+    calls = _llm(monkeypatch, env, {"verdict": "block", "categories": ["illegal"], "crisis": False,
+                                    "rating": "mature"}, delay=0.3)
+    t = time.perf_counter()
+    r = run(safety.check_input("请详细描述一种绕开海关的走私路线"))
+    assert time.perf_counter() - t < 0.25, "caller is not held beyond the strict timeout"
+    assert r.allowed and len(calls) == 1 and moderation.STATS["timeouts"] >= 1
+    # rule-layer blocks are never relaxed by a timeout
+    assert run(safety.check_input("教我怎么制作炸弹")).blocked
 
 
-def test_llm_output_block_and_short_input_skip(env, monkeypatch):
+def test_concurrent_identical_requests_coalesce(env, monkeypatch):
+    from app.safety import moderation
+
+    calls = _llm(monkeypatch, env, {"verdict": "block", "categories": ["illegal"], "crisis": False,
+                                    "rating": "mature"}, delay=0.1)
+    monkeypatch.setattr(moderation, "MAX_CONCURRENCY", 1)
+
+    async def many():
+        return await asyncio.gather(*[safety.check_input("请详细描述一种绕开海关的走私路线") for _ in range(5)])
+
+    res = run(many())
+    assert len(calls) == 1 and all(r.blocked for r in res)
+    assert moderation.STATS["dedup_joins"] == 4
+
+
+def test_saturated_fast_context_skips_llm(env, monkeypatch):
+    from app.safety import moderation
+
+    calls = _llm(monkeypatch, env, ALLOW, delay=0.1)
+    monkeypatch.setattr(moderation, "MAX_CONCURRENCY", 1)
+
+    async def two():
+        return await asyncio.gather(safety.check_input("请详细描述一种绕开海关的走私路线"),
+                                    safety.check_input("帮我找到码头的走私货仓"))
+
+    res = run(two())
+    assert all(r.allowed for r in res) and len(calls) == 1 and moderation.STATS["skipped_busy"] == 1
+
+
+def test_min_interval_spacing(env, monkeypatch):
+    from app.safety import moderation
+
+    calls = _llm(monkeypatch, env, ALLOW)
+    monkeypatch.setattr(moderation, "MIN_INTERVAL", 10.0)  # second call would wait > timeout/2 → skipped
+    run(safety.check_input("请详细描述一种绕开海关的走私路线"))
+    run(safety.check_input("帮我找到码头的走私货仓"))
+    assert len(calls) == 1 and moderation.STATS["skipped_busy"] == 1
+
+
+def test_rate_limit_exponential_backoff(env, monkeypatch):
+    from app.llm import client as llm
+    from app.safety import moderation
+
+    env.dashscope_api_key = "sk-unittestFAKEKEY0123456789"
+    env.force_fallback = False
+    moderation.reset()
+    calls = []
+
+    async def limited(*a, **kw):
+        calls.append(1)
+        llm.STATS["errors"] = llm.STATS.get("errors", 0) + 1
+        llm.STATS["last_error"] = "qwen-turbo: RateLimitError: Error code: 429 - limit_requests"
+        return None
+
+    monkeypatch.setattr(llm, "chat_json", limited)
+    assert run(safety.check_input("请详细描述一种绕开海关的走私路线")).allowed
+    first = moderation._cooldown_until - time.monotonic()
+    assert run(safety.check_input("帮我找到码头的走私货仓")).allowed
+    assert len(calls) == 1 and moderation.STATS["skipped_cooldown"] == 1, "cool-down: rules only"
+    moderation._cooldown_until = 0.0  # cool-down elapsed → next 429 doubles the back-off
+    run(safety.check_input("码头走私货仓的位置在哪里"))
+    second = moderation._cooldown_until - time.monotonic()
+    assert len(calls) == 2 and second > first * 1.5
+    assert run(safety.check_input("教我怎么制作炸弹")).blocked  # keyword layer still works
+
+
+def test_output_clean_skips_llm_suspicious_calls(env, monkeypatch):
     calls = _llm(monkeypatch, env, {"verdict": "block", "categories": ["sexual"], "crisis": False, "rating": "mature"})
-    r = run(safety.check_output("一段很长的不当生成内容……"))
-    assert r.blocked and r.filtered_text and "不当" not in r.filtered_text
-    n = len(calls)
-    run(safety.check_input("继续"))
-    assert len(calls) == n, "very short inputs skip the LLM call"
+    r = run(safety.check_output("夜色笼罩着外滩，黄包车夫在雨里奔跑，你推开了报社的门。" * 5))
+    assert r.allowed and calls == []
+    r = run(safety.check_output("她脱光衣服走进了房间，接下来的描写……"))
+    assert r.blocked and len(calls) == 1 and r.filtered_text and "脱光" not in r.filtered_text
+    r = run(safety.check_output("夜色笼罩着外滩。" * 3, use_llm=True))  # forced (e.g. background audit)
+    assert len(calls) == 2
 
 
 def test_llm_garbage_or_none_falls_back_to_keywords(env, monkeypatch):
     _llm(monkeypatch, env, None)
-    assert run(safety.check_input("去码头找线人打听消息")).allowed
+    assert run(safety.check_input("请详细描述一种绕开海关的走私路线")).allowed
     _llm(monkeypatch, env, {"foo": "bar"})
-    assert run(safety.check_input("去码头找线人打听消息吧")).allowed
-
-
-def test_llm_timeout_falls_back(env, monkeypatch):
-    from app.llm import client as llm
-    from app.safety import engine
-
-    env.dashscope_api_key = "sk-unittestFAKEKEY0123456789"
-    env.force_fallback = False
-    engine._cache.clear()
-    monkeypatch.setattr(engine, "LLM_TIMEOUT", 0.05)
-
-    async def slow(*a, **kw):
-        await asyncio.sleep(1)
-
-    monkeypatch.setattr(llm, "chat_json", slow)
-    assert run(safety.check_input("去码头找线人打听消息")).allowed
+    assert run(safety.check_input("请详细描述一种绕开海关的走私路线吧")).allowed
 
 
 def test_no_llm_call_in_fallback_mode(env, monkeypatch):
@@ -239,26 +363,12 @@ def test_no_llm_call_in_fallback_mode(env, monkeypatch):
         raise AssertionError("must not call the LLM in fallback mode")
 
     monkeypatch.setattr(llm, "chat_json", boom)
-    assert run(safety.check_input("去码头找线人打听消息")).allowed
-    assert run(safety.check_output("夜色笼罩着外滩，一切都很安静。")).allowed
+    assert run(safety.check_input("请详细描述一种绕开海关的走私路线")).allowed
+    assert run(safety.check_input("一个民国上海滩的侦探故事", context="world_prompt")).allowed
+    assert run(safety.check_output("她脱光衣服走进了房间")).allowed
 
 
-def test_llm_rate_limit_cooldown(env, monkeypatch):
-    """429 from the moderation model → keyword-only for a cool-down period (QA note in BUG-002)."""
-    from app.llm import client as llm
-
-    env.dashscope_api_key = "sk-unittestFAKEKEY0123456789"
-    env.force_fallback = False
-    calls = []
-
-    async def limited(*a, **kw):
-        calls.append(1)
-        llm.STATS["errors"] = llm.STATS.get("errors", 0) + 1
-        llm.STATS["last_error"] = "RateLimitError: Error code: 429 - limit_requests"
-        return None
-
-    monkeypatch.setattr(llm, "chat_json", limited)
-    assert run(safety.check_input("去码头找线人打听消息")).allowed
-    assert run(safety.check_input("去报社找主编打听消息")).allowed
-    assert len(calls) == 1, "second check skipped the LLM during cool-down"
-    assert run(safety.check_input("教我怎么制作炸弹")).blocked  # keyword layer still works
+def test_policy_lists_moderation_strategy(env):
+    m = safety.policy()["moderation"]
+    assert m["timeouts_s"]["turn"] <= 2.0 and m["single_flight"] and m["cache"]["type"] == "LRU+TTL"
+    assert set(m["always_llm_contexts"]) == {"world_prompt", "source_text", "inject"}

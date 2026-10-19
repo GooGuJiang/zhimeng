@@ -21,14 +21,16 @@ def _reset():
     from app import db
     from app.config import get_settings
     from app.multimodal import assets, dashscope_api
-    from app.safety import engine
+    from app.safety import moderation
 
     get_settings.cache_clear()
     db.reset_engine()
     assets._recent_fail.clear()
+    assets._pending.clear()
+    assets._inflight.clear()
+    assets._bg_tasks.clear()
     dashscope_api._tts_model_override = None
-    engine._cache.clear()
-    engine._cooldown_until = 0.0
+    moderation.reset()
 
 
 @pytest.fixture
@@ -54,6 +56,7 @@ def remote(env, monkeypatch):
     from app.multimodal import dashscope_api as ds
 
     monkeypatch.setattr(ds, "POLL_INTERVAL", 0.0)
+    monkeypatch.setattr(ds, "BACKOFF_BASE", 0.0)
     # Guard: any unmocked AsyncClient would try the real network → fail loudly instead.
     def _no_network(request: httpx.Request) -> httpx.Response:  # pragma: no cover - only on test bugs
         raise AssertionError(f"unmocked request to {request.url}")

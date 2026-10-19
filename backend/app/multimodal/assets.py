@@ -47,7 +47,8 @@ RETRY_AFTER = float(os.getenv("ZM_MM_RETRY_AFTER", "60"))  # seconds before a fa
 _recent_fail: dict[str, float] = {}
 _sem: asyncio.Semaphore | None = None
 _inflight: dict[str, asyncio.Future] = {}
-STATS: dict[str, int] = {"image_calls": 0, "tts_calls": 0, "cache_hits": 0, "fallbacks": 0, "tts_chars": 0}
+STATS: dict[str, int] = {"image_calls": 0, "tts_calls": 0, "cache_hits": 0, "fallbacks": 0, "tts_chars": 0,
+                         "deferred": 0, "upgraded": 0}
 
 
 def _semaphore() -> asyncio.Semaphore:
@@ -158,8 +159,10 @@ def tts_text(text: str, limit: int | None = None) -> str:
 
 async def _dedup(key: str, factory):
     """Coalesce concurrent identical requests into one provider call."""
-    if key in _inflight:
-        return await asyncio.shield(_inflight[key])
+    cur = _inflight.get(key)
+    if cur is not None and not cur.done() and cur.get_loop() is asyncio.get_running_loop():
+        STATS["dedup_joins"] = STATS.get("dedup_joins", 0) + 1
+        return await asyncio.shield(cur)
     fut = asyncio.get_running_loop().create_future()
     _inflight[key] = fut
     try:
@@ -215,50 +218,147 @@ def _unique(prefix: str, key: str, ext: str, force: bool) -> str:
     return f"{prefix}_{key[:16]}{'_' + uuid.uuid4().hex[:6] if force else ''}.{ext}"
 
 
-async def generate_illustration(world_id: str, prompt: str, turn_id: str | None = None,
-                                force: bool = False, minor_mode: bool = False) -> Asset:
-    """Return an image Asset (cached by prompt hash). Never raises for API failure: SVG placeholder fallback."""
-    s = get_settings()
-    prompt = _sanitize_prompt(prompt or "")[:500] or STYLE
-    key = cache_key("image", s.image_model, IMAGE_SIZE, prompt)
-    remote = _remote_ok(world_id, "image") and (force or not _cooling(key))
+# ---- background completion (deadline exceeded → placeholder now, real asset later, same row) ----
+_bg_tasks: set[asyncio.Task] = set()
+_pending: dict[tuple[str, str], str] = {}  # (world_id, cache_key) → placeholder row id being upgraded
+
+
+def pending_ids() -> list[str]:
+    """Asset ids currently served as placeholder while the real file is still being generated."""
+    return list(_pending.values())
+
+
+def is_pending(asset_id: str) -> bool:
+    return asset_id in _pending.values()
+
+
+async def wait_for_asset(asset_id: str, timeout: float = 30.0) -> Asset | None:
+    """Long-poll helper for routes: wait until a pending placeholder was upgraded (or timeout), then return
+    the current row."""
+    end = time.monotonic() + max(0.0, timeout)
+    while is_pending(asset_id) and time.monotonic() < end:
+        await asyncio.sleep(0.25)
+    return get_asset(asset_id)
+
+
+async def drain_background(timeout: float = 30.0) -> None:
+    """Wait for all background upgrades (tests / graceful shutdown)."""
+    tasks = [t for t in _bg_tasks if not t.done()]
+    if tasks:
+        await asyncio.wait(tasks, timeout=timeout)
+
+
+def _placeholder_file(kind: str, key: str, prompt: str, force: bool) -> str:
+    if kind == "image":
+        fname = _unique("img_fb", key, "svg", force)
+        path = _assets_dir() / fname
+        if not path.exists():
+            m = re.search(r"地点：([^。]+)", prompt)
+            cap = re.search(r"画面：([^。]+(?:。[^。]+)?)", prompt)
+            path.write_bytes(placeholder_svg(m.group(1) if m else "织梦", cap.group(1) if cap else prompt[:80]))
+        return fname
+    fname = _unique("tts_fb", key, "wav", force)
+    path = _assets_dir() / fname
+    if not path.exists():
+        path.write_bytes(silent_wav())
+    return fname
+
+
+async def _generate(kind: str, world_id: str, prompt: str, key: str, turn_id: str | None, force: bool,
+                    produce, allow_fallback: bool, deadline: float | None) -> Asset | None:
+    """Shared cache → remote (with optional deadline) → fallback flow for images and audio. Never raises for
+    provider/network failures. ``produce()`` returns the stored file name of a real asset."""
+    remote = _remote_ok(world_id, kind) and (force or not _cooling(key))
     upgrade: AssetRow | None = None  # cached fallback row to upgrade in place (BUG-005)
     if not force:
-        same, other = _find_cached(key, world_id, allow_fallback=True)
+        pend = _pending.get((world_id, key))
+        if pend and (a := get_asset(pend)):  # a background job is already producing this exact asset
+            STATS["cache_hits"] += 1
+            return a
+        same, other = _find_cached(key, world_id, allow_fallback=allow_fallback)
         if same and (same.source != "fallback" or not remote):
             STATS["cache_hits"] += 1
             return to_asset(same)
         upgrade = same
-        if other:  # same prompt already generated for another world: reuse the file, no new bill
+        if other:  # same content already generated for another world: reuse the file, no new bill
             STATS["cache_hits"] += 1
-            return _persist(world_id, "image", other.url, prompt, key, "dashscope", turn_id, upgrade)
+            return _persist(world_id, kind, other.url, prompt, key, "dashscope", turn_id, upgrade)
     if remote:
+        job = asyncio.ensure_future(produce())
         try:
-            async def call() -> bytes:
-                async with _semaphore():
-                    STATS["image_calls"] += 1
-                    neg = NEGATIVE + ("，暴力，惊悚" if minor_mode else "")
-                    return await ds.text_to_image(prompt, neg, IMAGE_SIZE)
-            data = await (call() if force else _dedup(key, call))
-            data = png_with_ai_metadata(data, ai_meta(s.image_model, "image", prompt=prompt[:200]))
-            fname = _unique("img", key, "png", force)
-            (_assets_dir() / fname).write_bytes(data)
+            if deadline is not None and deadline >= 0:
+                fname = await asyncio.wait_for(asyncio.shield(job), timeout=deadline)
+            else:
+                fname = await job
             _recent_fail.pop(key, None)
-            return _persist(world_id, "image", _url(fname), prompt, key, "dashscope", turn_id, upgrade)
+            return _persist(world_id, kind, _url(fname), prompt, key, "dashscope", turn_id, upgrade)
+        except asyncio.TimeoutError:
+            # Deadline hit: answer now with a placeholder row, keep polling in the background and upgrade
+            # the very same row (id unchanged, source → "dashscope") when the real asset lands.
+            if upgrade is None:
+                upgrade_row = _save(world_id, kind, _url(_placeholder_file(kind, key, prompt, force)), prompt, key,
+                                    "fallback", turn_id)
+                row_id = upgrade_row.id
+            else:
+                row_id = upgrade.id
+            STATS["deferred"] += 1
+            _pending[(world_id, key)] = row_id
+            t = asyncio.ensure_future(_finish(kind, job, row_id, world_id, key, turn_id))
+            _bg_tasks.add(t)
+            t.add_done_callback(_bg_tasks.discard)
+            return get_asset(row_id)
         except Exception as e:  # noqa: BLE001 - any failure → placeholder
             _recent_fail[key] = time.monotonic()
-            log.warning("image generation failed, using placeholder: %s: %s", type(e).__name__, ds.redact(e))
+            log.warning("%s generation failed, using placeholder: %s: %s", kind, type(e).__name__, ds.redact(e))
     STATS["fallbacks"] += 1
     if upgrade is not None:  # retry failed → keep serving the existing placeholder row, no new row
         return to_asset(upgrade)
-    fname = _unique("img_fb", key, "svg", force)
-    path = _assets_dir() / fname
-    if not path.exists():
-        m = re.search(r"地点：([^。]+)", prompt)
-        cap = re.search(r"画面：([^。]+(?:。[^。]+)?)", prompt)
-        title = m.group(1) if m else "织梦"
-        path.write_bytes(placeholder_svg(title, cap.group(1) if cap else prompt[:80]))
-    return _save(world_id, "image", _url(fname), prompt, key, "fallback", turn_id)
+    if not allow_fallback:
+        return None
+    fname = _placeholder_file(kind, key, prompt, force)
+    return _save(world_id, kind, _url(fname), prompt, key, "fallback", turn_id)
+
+
+async def _finish(kind: str, job: asyncio.Future, row_id: str, world_id: str, key: str, turn_id: str | None) -> None:
+    try:
+        fname = await job
+        _recent_fail.pop(key, None)
+        _update_row(row_id, _url(fname), "dashscope", turn_id)
+        STATS["upgraded"] += 1
+        log.info("background %s ready, asset %s upgraded in place", kind, row_id)
+    except Exception as e:  # noqa: BLE001
+        _recent_fail[key] = time.monotonic()
+        log.warning("background %s failed, placeholder kept: %s: %s", kind, type(e).__name__, ds.redact(e))
+    finally:
+        if _pending.get((world_id, key)) == row_id:
+            _pending.pop((world_id, key), None)
+
+
+async def generate_illustration(world_id: str, prompt: str, turn_id: str | None = None,
+                                force: bool = False, minor_mode: bool = False,
+                                deadline: float | None = None) -> Asset:
+    """Return an image Asset (cached by prompt hash). Never raises for API failure: SVG placeholder fallback.
+    ``deadline`` (s): return a placeholder after this long and finish/upgrade the same row in the background."""
+    s = get_settings()
+    prompt = _sanitize_prompt(prompt or "")[:500] or STYLE
+    key = cache_key("image", s.image_model, IMAGE_SIZE, prompt)
+
+    async def call() -> bytes:
+        async with _semaphore():
+            STATS["image_calls"] += 1
+            neg = NEGATIVE + ("，暴力，惊悚" if minor_mode else "")
+            return await ds.text_to_image(prompt, neg, IMAGE_SIZE)
+
+    async def produce() -> str:
+        data = await (call() if force else _dedup(key, call))
+        data = png_with_ai_metadata(data, ai_meta(s.image_model, "image", prompt=prompt[:200]))
+        fname = _unique("img", key, "png", force)
+        (_assets_dir() / fname).write_bytes(data)
+        return fname
+
+    a = await _generate("image", world_id, prompt, key, turn_id, force, produce, True, deadline)
+    assert a is not None
+    return a
 
 
 def _supported_voice(v: str | None, speaker: str | dict[str, Any] | None) -> str:
@@ -271,55 +371,31 @@ def _supported_voice(v: str | None, speaker: str | dict[str, Any] | None) -> str
 
 async def generate_tts(world_id: str, text: str, voice: str | None = None, turn_id: str | None = None,
                        speaker: str | dict[str, Any] | None = None, force: bool = False,
-                       allow_fallback: bool = True) -> Asset | None:
+                       allow_fallback: bool = True, deadline: float | None = None) -> Asset | None:
     """Return an audio Asset (wav). ``voice`` overrides speaker casting. Falls back to a silent WAV
-    (``source="fallback"``) — or ``None`` when ``allow_fallback`` is False (e.g. auto key-scene audio → skip)."""
-    s = get_settings()
+    (``source="fallback"``) — or ``None`` when ``allow_fallback`` is False (e.g. auto key-scene audio → skip).
+    ``deadline`` as in ``generate_illustration``."""
     text = tts_text(text)
     if not text:
         return None
     v = _supported_voice(voice, speaker)
-    model = ds.effective_tts_model()
-    key = cache_key("audio", model, v, text)
-    remote = _remote_ok(world_id, "audio") and (force or not _cooling(key))
-    upgrade: AssetRow | None = None
-    if not force:
-        same, other = _find_cached(key, world_id, allow_fallback=allow_fallback)
-        if same and (same.source != "fallback" or not remote):
-            STATS["cache_hits"] += 1
-            return to_asset(same)
-        upgrade = same
-        if other:
-            STATS["cache_hits"] += 1
-            return _persist(world_id, "audio", other.url, text, key, "dashscope", turn_id, upgrade)
-    if remote:
-        try:
-            async def call() -> bytes:
-                async with _semaphore():
-                    STATS["tts_calls"] += 1
-                    STATS["tts_chars"] += len(text)
-                    return await ds.text_to_speech(text, v)
-            data = await (call() if force else _dedup(key, call))
-            if not data:
-                raise ds.DashScopeError("EmptyAudio", "empty audio body")
-            data = fix_wav_header(data)
-            fname = _unique("tts", key, "wav", force)
-            (_assets_dir() / fname).write_bytes(data)
-            _recent_fail.pop(key, None)
-            return _persist(world_id, "audio", _url(fname), text, key, "dashscope", turn_id, upgrade)
-        except Exception as e:  # noqa: BLE001
-            _recent_fail[key] = time.monotonic()
-            log.warning("tts failed, using fallback: %s: %s", type(e).__name__, ds.redact(e))
-    STATS["fallbacks"] += 1
-    if upgrade is not None:
-        return to_asset(upgrade)
-    if not allow_fallback:
-        return None
-    fname = _unique("tts_fb", key, "wav", force)
-    path = _assets_dir() / fname
-    if not path.exists():
-        path.write_bytes(silent_wav())
-    return _save(world_id, "audio", _url(fname), text, key, "fallback", turn_id)
+    key = cache_key("audio", ds.effective_tts_model(), v, text)
+
+    async def call() -> bytes:
+        async with _semaphore():
+            STATS["tts_calls"] += 1
+            STATS["tts_chars"] += len(text)
+            return await ds.text_to_speech(text, v)
+
+    async def produce() -> str:
+        data = await (call() if force else _dedup(key, call))
+        if not data:
+            raise ds.DashScopeError("EmptyAudio", "empty audio body")
+        fname = _unique("tts", key, "wav", force)
+        (_assets_dir() / fname).write_bytes(fix_wav_header(data))
+        return fname
+
+    return await _generate("audio", world_id, text, key, turn_id, force, produce, allow_fallback, deadline)
 
 
 def get_asset(asset_id: str) -> Asset | None:
@@ -346,15 +422,16 @@ def _voice_from_key(row: AssetRow) -> str | None:
     return None
 
 
-async def regenerate_asset(asset_id: str) -> Asset | None:
+async def regenerate_asset(asset_id: str, deadline: float | None = None) -> Asset | None:
     """POST /api/assets/{id}/regenerate → new file (bypasses cache), same prompt/voice."""
     with session_scope() as s:
         r = s.get(AssetRow, asset_id)
     if not r:
         return None
     if r.type == "image":
-        return await generate_illustration(r.world_id, r.prompt, r.turn_id, force=True)
-    return await generate_tts(r.world_id, r.prompt, voice=_voice_from_key(r), turn_id=r.turn_id, force=True)
+        return await generate_illustration(r.world_id, r.prompt, r.turn_id, force=True, deadline=deadline)
+    return await generate_tts(r.world_id, r.prompt, voice=_voice_from_key(r), turn_id=r.turn_id, force=True,
+                              deadline=deadline)
 
 
 def is_key_scene(turn_index: int, events: list[dict[str, Any]] | None = None, chapter_size: int | None = None,
@@ -372,14 +449,16 @@ def is_key_scene(turn_index: int, events: list[dict[str, Any]] | None = None, ch
 
 
 async def key_scene_assets(world: dict[str, Any], narration: str, turn_id: str | None = None,
-                           location: str | None = None, with_audio: bool = True) -> list[Asset]:
+                           location: str | None = None, with_audio: bool = True,
+                           deadline: float | None = None) -> list[Asset]:
     """Generate illustration + narrator audio concurrently for a key scene.
-    Audio is skipped (not placeholder) when TTS is unavailable."""
+    Audio is skipped (not placeholder) when TTS is unavailable. ``deadline`` → see ``generate_illustration``."""
     wid = world.get("id", "unknown")
     minor = bool(world.get("minor_mode"))
     prompt = build_scene_prompt(world, narration, location, minor)
-    jobs = [generate_illustration(wid, prompt, turn_id, minor_mode=minor)]
+    jobs = [generate_illustration(wid, prompt, turn_id, minor_mode=minor, deadline=deadline)]
     if with_audio:
-        jobs.append(generate_tts(wid, narration, speaker="narrator", turn_id=turn_id, allow_fallback=False))
+        jobs.append(generate_tts(wid, narration, speaker="narrator", turn_id=turn_id, allow_fallback=False,
+                                 deadline=deadline))
     res = await asyncio.gather(*jobs, return_exceptions=True)
     return [a for a in res if isinstance(a, Asset)]

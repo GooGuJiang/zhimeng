@@ -73,7 +73,8 @@ CRISIS_PATTERNS: list[str] = [
     r"\b(kill myself|suicide|end my life|self[- ]harm)\b",
     r"遗书.{0,4}(写好|准备)",
 ]
-CRISIS_HINTS = ["自杀", "轻生", "自残", "割腕", "跳楼", "抑郁", "绝望", "活不下去", "想死"]
+CRISIS_HINTS = ["自杀", "轻生", "自残", "割腕", "跳楼", "抑郁", "绝望", "活不下去", "想死", "没有希望", "没希望",
+                "撑不下去", "活着好累", "想消失", "解脱", "一了百了", "安眠药", "遗书"]
 
 _CRISIS_RE = [re.compile(p, re.I) for p in CRISIS_PATTERNS]
 _HARD_RE = {cat: [re.compile(p, re.I) for p in ps] for cat, ps in HARD_BLOCK_PATTERNS.items()}
@@ -161,3 +162,63 @@ def mask_fast(text: str, minor_mode: bool = False) -> str:
         return text
     r = _CHUNK_MINOR_RE if minor_mode else _CHUNK_RE
     return r.sub(lambda m: "＊" * len(m.group(0)), text)
+
+
+# ---- grey zone: rule layer is NOT sure → worth an LLM look (never blocks by itself) ----
+GREY: dict[str, list[str]] = {
+    "sexual": ["色情", "情色", "性爱", "性行为", "裸", "脱光", "胸部", "下体", "呻吟", "调教", "援交", "约炮", "一夜情",
+               "开房", "春药", "迷药", "偷拍", "露骨", "做爱"],
+    "minors": ["萝莉", "正太", "幼童", "未成年", "小学生", "初中生", "中学生"],
+    "drugs_weapons": ["毒品", "吸毒", "大麻", "冰毒", "海洛因", "摇头丸", "炸药", "炸弹", "雷管", "枪支", "手枪", "步枪",
+                      "子弹", "弹药", "配方", "提炼", "合成"],
+    "crime": ["诈骗", "洗钱", "黑客", "入侵", "盗号", "木马", "赌场", "博彩", "偷渡", "走私", "贩卖人口", "拐卖"],
+    "politics": ["政府", "政权", "共产党", "国民党", "习近平", "总书记", "国家主席", "领导人", "台独", "藏独", "疆独", "港独",
+                 "法轮", "六四", "天安门", "游行", "示威", "颠覆", "反动"],
+    "hate": ["种族", "黑鬼", "支那", "劣等", "灭绝"],
+    "privacy": ["身份证", "手机号", "电话号码", "家庭住址", "银行卡", "密码", "真实姓名"],
+    "extremism": ["恐怖分子", "圣战", "极端组织"],
+}
+# Extra grey words only in minor mode.
+MINOR_GREY: list[str] = ["恋爱", "爱上", "表白", "亲吻", "拥抱", "约会", "网友", "见面", "借钱", "贷款", "充值", "氪",
+                         "香烟", "喝醉", "醉酒", "打架", "欺负", "霸凌", "离家出走", "逃学", "纹身", "彩票", "抽卡", "减肥药"]
+# Soft injection-like features (strong patterns are in INJECTION_PATTERNS and block directly).
+INJECTION_HINTS: list[str] = ["指令", "提示词", "系统消息", "系统设定", "越狱", "忽略", "无视", "审查", "过滤", "人工智能",
+                              "大模型", "语言模型", "你的设定", "你的规则", "扮演一个", "不受限制"]
+_INJECTION_HINT_RE = re.compile(r"\b(ai|gpt|chatgpt|llm|prompt|system|assistant|developer|instructions?|jailbreak)\b",
+                                re.I)
+_CONTACT_RE = re.compile(r"https?://|www\.|\d{7,}|[\w.-]+@[\w-]+\.|微信|vx|qq号|telegram|加群", re.I)
+_OBFUSCATION_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]|[\uff01-\uff5e]{3,}")
+
+
+def grey_hits(text: str, minor_mode: bool = False) -> dict[str, list[str]]:
+    hits = find(text, GREY)
+    if minor_mode:
+        n = normalize(text)
+        m = [w for w in MINOR_GREY if w in n]
+        if m:
+            hits["minor_sensitive"] = m
+    return hits
+
+
+def injection_hint(text: str) -> bool:
+    n = normalize(text)
+    return any(h in n for h in INJECTION_HINTS) or bool(_INJECTION_HINT_RE.search(text or ""))
+
+
+def contact_or_url(text: str) -> bool:
+    return bool(_CONTACT_RE.search(text or ""))
+
+
+def obfuscated(text: str) -> bool:
+    """Zero-width / full-width runs, or many separators inserted between CJK chars ("制 * 毒")."""
+    raw = text or ""
+    if _OBFUSCATION_RE.search(raw):
+        return True
+    n = normalize(raw)
+    stripped = re.sub(r"\s", "", raw)
+    return len(stripped) >= 6 and len(stripped) - len(n) >= max(3, len(stripped) // 4)
+
+
+def latin_heavy(text: str) -> bool:
+    letters = sum(1 for c in text or "" if c.isascii() and c.isalpha())
+    return letters >= 16 and letters >= 0.5 * max(1, len((text or "").replace(" ", "")))
