@@ -21,6 +21,7 @@ import { usePrefs } from "@/hooks/usePrefs";
 import { setCurrentWorld } from "@/hooks/useCurrentWorld";
 import { downloadBlob } from "@/lib/video";
 import { AiLabel } from "@/components/AiLabel";
+import { Markdown } from "@/components/Markdown";
 import { Loom } from "@/components/Loom";
 import { GenUI, type GenUIHandlers } from "@/components/GenUI";
 import { OffscreenPanel } from "@/components/OffscreenPanel";
@@ -46,6 +47,8 @@ export function PlayView({ id }: { id: string }) {
   const [report, setReport] = useState<ReportTarget | null>(null);
   const [posterOpen, setPosterOpen] = useState(false);
   const [eduOpen, setEduOpen] = useState(false);
+  // phones: the story and the 世界面板 share one column — a sticky segmented switch flips between them
+  const [mobileTab, setMobileTab] = useState<"story" | "world">("story");
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -184,7 +187,7 @@ export function PlayView({ id }: { id: string }) {
               <span>{t.action}</span>
             </div>
           ) : null}
-          <p className="narr">{t.narration}</p>
+          <Markdown className="narr" text={t.narration} />
           {media(assetsFor(t.id, isLatest))}
           <div className="turn-meta">
             <AiLabel text={t.ai_label} />
@@ -264,8 +267,30 @@ export function PlayView({ id }: { id: string }) {
         </aside>
       ) : null}
 
+      <div className="play-tabs" role="tablist" aria-label="切换视图">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === "story"}
+          className={mobileTab === "story" ? "on" : ""}
+          onClick={() => setMobileTab("story")}
+        >
+          故事
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === "world"}
+          className={mobileTab === "world" ? "on" : ""}
+          data-testid="world-panel-tab"
+          onClick={() => setMobileTab("world")}
+        >
+          世界面板{p.busy ? " ·" : ""}
+        </button>
+      </div>
+
       <div className="play">
-        <div className="play-main">
+        <div className={`play-main${mobileTab === "world" ? " hide-m" : ""}`}>
           <section className="card story">
             <header className="story-head">
               <h1 className="h1">{world.title}</h1>
@@ -346,7 +371,7 @@ export function PlayView({ id }: { id: string }) {
                   data-testid={latestKey === "opening" ? "narration-latest" : "narration-turn"}
                 >
                   <div className="chapter-mark">序 章</div>
-                  <p className="narr">{world.opening_scene || world.premise}</p>
+                  <Markdown className="narr" text={world.opening_scene || world.premise} />
                   {media(assetsFor(null, latestKey === "opening"), true)}
                   <div className="turn-meta">
                     <AiLabel text={world.ai_label} />
@@ -392,10 +417,7 @@ export function PlayView({ id }: { id: string }) {
                       模型连接中断，已改由本地叙事模板重新讲述本回合
                     </div>
                   ) : null}
-                  <p className="narr live">
-                    {p.live.text}
-                    <span className="caret" aria-hidden />
-                  </p>
+                  <Markdown className="narr live is-live" text={p.live.text} streaming />
                   {media(
                     p.assets.filter((a) => a.turn_id && !turnIds.has(a.turn_id)),
                     true,
@@ -492,7 +514,11 @@ export function PlayView({ id }: { id: string }) {
           </section>
         </div>
 
-        <aside className="play-side" aria-label="世界面板">
+        <aside
+          className={`play-side${mobileTab === "story" ? " hide-m" : ""}`}
+          aria-label="世界面板"
+          data-testid="world-panel"
+        >
           <GenUI
             components={p.ui}
             handlers={handlers}

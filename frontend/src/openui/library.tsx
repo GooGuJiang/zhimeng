@@ -13,6 +13,7 @@
  *  - @Inject("…")      → god-view event injection
  *  - @ToAssistant(msg) → treated like @Act
  */
+import { Markdown } from "@/components/Markdown";
 import {
   action,
   createLibrary,
@@ -145,7 +146,10 @@ export const Text = defineComponent({
   description: "Body text. tone colors it.",
   props: z.object({ text: z.string(), tone: tone.optional(), size: z.enum(["xs", "sm", "md"]).optional() }),
   component: ({ props }) => (
-    <p className={cx("zu-text", `c-${props.tone ?? "ink"}`, `s-${props.size ?? "sm"}`)}>{props.text}</p>
+    <Markdown
+      className={cx("zu-text", `c-${props.tone ?? "ink"}`, `s-${props.size ?? "sm"}`)}
+      text={props.text}
+    />
   ),
 });
 export const Badge = defineComponent({
@@ -537,7 +541,9 @@ export const EventLine = defineComponent({
     <div className={cx("zu-evt", `k-${props.kind ?? "world"}`)}>
       <span className="zu-evt-dot" aria-hidden />
       <div>
-        <p className="zu-text s-sm">{props.summary}</p>
+        <p className="zu-text s-sm">
+          <Markdown inline text={props.summary} />
+        </p>
         <p className="zu-text s-xs c-muted">
           {[props.time, kindLabel(props.kind), props.impact].filter(Boolean).join(" · ")}
         </p>
@@ -578,7 +584,9 @@ function FlipCard({ title, content, source }: { title: string; content: string; 
           <span className="zu-kc-hint">轻触翻面</span>
         </span>
         <span className="zu-kc-back">
-          <span className="zu-text s-sm">{content}</span>
+          <span className="zu-text s-sm">
+            <Markdown inline text={content} />
+          </span>
           {source ? <span className="zu-text s-xs c-muted">出处：{source}</span> : null}
         </span>
       </span>

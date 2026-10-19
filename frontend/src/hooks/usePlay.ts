@@ -384,6 +384,8 @@ export function usePlay(worldId: string) {
                     setTargetText(turn.narration);
                   }
                   committed.current = { turn, state: state ?? (world?.state as WorldState), rewrite };
+                  // the 世界面板 / header reflect the new state right away (narration may still be typing)
+                  if (state) setWorld((w) => (w ? { ...w, state } : w));
                   setOptions(newOptions ?? turn.options ?? []);
                 }
                 break;

@@ -531,7 +531,9 @@ input[type="range"] { accent-color: var(--gold); }
   .h-display { font-size: clamp(30px, 9vw, 44px); }
   .opt-group { gap: 8px; }
 }
-html, body { overflow-x: hidden; }
+/* `clip` (not `hidden`): overflow-x:hidden on <body> turns it into a scroll container, which silently
+   breaks every position:sticky (topbar, 世界面板, god-side) because they stick to a box that never scrolls. */
+html, body { overflow-x: clip; }
 .poster > .poster-img { position: absolute; inset: 0; }
 
 /* v1.2 two-step generation + refine */
@@ -550,3 +552,55 @@ html, body { overflow-x: hidden; }
 .audio-pending { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; opacity: 0.85; flex: 1; }
 .spin { animation: zm-spin 1s linear infinite; }
 @keyframes zm-spin { to { transform: rotate(360deg); } }
+
+/* ---------- sticky 世界面板 ---------- */
+.play-side { overscroll-behavior: contain; }
+/* the sticky panel is bounded by its grid row: extend the row past the story card (taking the page's own
+   bottom padding) so that scrolling to the very end never pushes the panel up under the top bar */
+@media (min-width: 861px) {
+  .play-main { padding-bottom: 48px; }
+  main.page:has(.play-page) { padding-bottom: 16px; }
+}
+.play-side::-webkit-scrollbar { width: 6px; }
+.play-side::-webkit-scrollbar-thumb { background: var(--line-2, rgba(217, 178, 106, 0.28)); border-radius: 6px; }
+@media (max-width: 860px) {
+  /* phones: one column + sticky 故事/世界面板 switch; the panel itself stays in normal flow */
+  .play-side { position: static; max-height: none; overflow: visible; padding-right: 0; }
+}
+
+/* ---------- markdown (model text) ---------- */
+.md { min-width: 0; overflow-wrap: anywhere; }
+.md.narr, .md.answer { white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.85em; }
+.md.narr p { margin-bottom: 1em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { font-family: var(--serif); color: var(--gold-2); letter-spacing: 0.06em; line-height: 1.5; margin: 1.1em 0 0.5em; font-weight: 600; }
+.md h1 { font-size: 1.32em; } .md h2 { font-size: 1.2em; } .md h3 { font-size: 1.1em; } .md h4, .md h5, .md h6 { font-size: 1em; }
+.md strong { color: var(--gold-2); font-weight: 600; }
+.md em { color: var(--ink); font-style: italic; }
+.md del { opacity: 0.6; }
+.md ul, .md ol { margin: 0 0 0.9em; padding-left: 1.5em; }
+.md li { margin: 0.2em 0; }
+.md li::marker { color: var(--gold-dim, var(--gold)); }
+.md blockquote { margin: 0 0 1em; padding: 0.2em 0 0.2em 1em; border-left: 2px solid var(--rose); color: var(--muted); background: linear-gradient(90deg, rgba(214, 109, 127, 0.06), transparent 70%); }
+.md code { font-family: var(--mono); font-size: 0.86em; padding: 0.1em 0.4em; border-radius: 4px; background: rgba(0, 0, 0, 0.32); border: 1px solid var(--line); }
+.md pre { margin: 0 0 1em; padding: 12px 14px; border-radius: var(--r-md, 10px); background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); overflow-x: auto; line-height: 1.6; }
+.md pre code { padding: 0; border: 0; background: none; font-size: 0.82em; }
+.md hr { border: 0; height: 1px; margin: 1.4em 0; background: linear-gradient(90deg, transparent, var(--line-2, var(--line)), transparent); }
+.md a, .md .md-link { color: var(--azure); text-decoration: underline; text-underline-offset: 3px; }
+.md-table { overflow-x: auto; margin: 0 0 1em; }
+.md table { border-collapse: collapse; font-family: var(--sans, inherit); font-size: 0.88em; line-height: 1.6; min-width: 50%; }
+.md th, .md td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+.md th { color: var(--gold-2); background: rgba(217, 178, 106, 0.06); font-weight: 600; }
+.md input[type="checkbox"] { accent-color: var(--gold); margin-right: 6px; }
+.md-inline p, .md-inline > :last-child { margin: 0; }
+.md-gap { margin-top: 16px; }
+.zu-text.md p { margin-bottom: 0.5em; }
+/* streaming: the caret rides at the end of the last block instead of on a new line */
+.md.is-live > :last-child::after, .md.is-live:empty::after {
+  content: ""; display: inline-block; width: 0.55em; height: 1.1em; vertical-align: -0.18em; margin-left: 2px;
+  background: var(--gold); border-radius: 2px; animation: blink 1s steps(2) infinite; box-shadow: 0 0 10px var(--gold);
+}
+.md.is-live > ul:last-child::after, .md.is-live > ol:last-child::after, .md.is-live > div:last-child::after,
+.md.is-live > pre:last-child::after, .md.is-live > blockquote:last-child::after { display: none; }

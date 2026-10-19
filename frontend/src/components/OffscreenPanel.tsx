@@ -1,5 +1,6 @@
 "use client";
 /** F3 "场外大事件": what NPCs and the world did while the player was elsewhere. */
+import { Markdown } from "./Markdown";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { World, WorldEvent } from "@/lib/types";
@@ -41,7 +42,9 @@ export function OffscreenPanel({ world, events }: { world: World; events: WorldE
               className={`offscreen-event k-${e.type}${e.seen ? "" : " new"}`}
               data-testid="offscreen-event"
             >
-              <p style={{ margin: 0 }}>{e.summary}</p>
+              <p style={{ margin: 0 }}>
+                <Markdown inline text={e.summary} />
+              </p>
               <p className="faint" style={{ margin: "2px 0 0" }}>
                 {[
                   e.in_world_time,

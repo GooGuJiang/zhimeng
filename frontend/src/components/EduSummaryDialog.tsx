@@ -1,5 +1,6 @@
 "use client";
 /** F10 学习小结: key points, timeline, interactive quiz, reflection. */
+import { Markdown } from "./Markdown";
 import { useEffect, useState } from "react";
 import { api, errorText } from "@/lib/api";
 import { Loom } from "./Loom";
@@ -22,7 +23,9 @@ export function EduSummaryView({ s }: { s: EducationSummary }) {
         <div className="eyebrow">知识要点</div>
         <ul className="points">
           {s.key_points.map((k, i) => (
-            <li key={i}>{k}</li>
+            <li key={i}>
+              <Markdown inline text={k} />
+            </li>
           ))}
         </ul>
       </section>
@@ -32,7 +35,7 @@ export function EduSummaryView({ s }: { s: EducationSummary }) {
           {s.timeline.map((t, i) => (
             <div key={i} className="timeline-row">
               <span className="num faint">第 {t.turn} 回合</span>
-              <span>{t.summary}</span>
+              <Markdown inline text={t.summary} />
             </div>
           ))}
         </section>
@@ -65,7 +68,8 @@ export function EduSummaryView({ s }: { s: EducationSummary }) {
               </div>
               {picked[qi] !== undefined ? (
                 <p className="faint" style={{ margin: "8px 0 0", fontSize: 13 }}>
-                  {picked[qi] === q.answer_index ? "✓ 答对了。" : "✗ 再想想。"} {q.explanation}
+                  {picked[qi] === q.answer_index ? "✓ 答对了。" : "✗ 再想想。"}{" "}
+                  <Markdown inline text={q.explanation} />
                 </p>
               ) : null}
             </div>
@@ -75,9 +79,7 @@ export function EduSummaryView({ s }: { s: EducationSummary }) {
       {s.reflection ? (
         <section>
           <div className="eyebrow">课后反思</div>
-          <p className="serif" style={{ margin: 0 }}>
-            {s.reflection}
-          </p>
+          <Markdown className="serif" text={s.reflection} />
         </section>
       ) : null}
       {s.cards?.length ? (

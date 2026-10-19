@@ -1,5 +1,6 @@
 "use client";
 /** F4 memory Q&A with citations (第几章·第几回合). */
+import { Markdown } from "./Markdown";
 import { useEffect, useState } from "react";
 import { api, errorText } from "@/lib/api";
 import type { Citation } from "@/lib/types";
@@ -76,9 +77,7 @@ export function MemoryQuery({
             <span className="eyebrow">世界的回答</span>
             <AiLabel text={res.ai_label} />
           </div>
-          <p className="answer" style={{ margin: 0 }}>
-            {res.answer}
-          </p>
+          <Markdown className="answer" text={res.answer} />
           {res.citations?.length ? (
             <div className="stack" style={{ gap: 8 }}>
               <span className="faint" style={{ fontSize: 12 }}>

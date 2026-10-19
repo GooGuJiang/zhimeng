@@ -14,7 +14,7 @@ AI 生成的不是一段文字，而是一个包含角色、地点、规则、�
 ## 目录
 
 - [系统架构](#系统架构) · [技术栈](#技术栈) · [功能模块 F1–F10](#功能模块-f1f10)
-- [快速开始](#快速开始) · [环境变量](#环境变量) · [测试](#测试) · [演示脚本](#演示脚本) · [团队分工](#团队分工)
+- [快速开始](#快速开始) · [环境变量](#环境变量) · [测试](#测试) · [界面说明](#界面说明) · [演示脚本](#演示脚本) · [团队分工](#团队分工)
 
 ## 系统架构
 
@@ -180,11 +180,22 @@ pnpm test                         # AC-1 ~ AC-9
 ZM_MODE=real pnpm test            # 真实模型模式（放宽超时；回合被限流失败时像用户一样点「重试」，次数记入测试注解）
 pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/（ZM_MODE=real pnpm demo 用真实模型）
 
+# 前端 mock 回归（只需前端在跑；含世界面板吸顶 / Markdown 渲染 / 手机端切换，截图 fe-27~fe-29）
+cd frontend && ZM_WEB=http://localhost:3000 pnpm test:mock
+
 # API 冒烟打到运行中的服务（例如真实模型模式）
 ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tests/integration -q
 ```
 
 验收用例与测试的对应关系见 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)，已知问题见 [BUGS.md](BUGS.md)。
+
+## 界面说明
+
+- **世界面板吸顶**：桌面端右侧「世界面板」随页面滚动固定在顶栏下方（内容超出时面板内部独立滚动），回合流式生成时实时刷新；手机端改为顶部吸附的「故事 / 世界面板」切换。
+- **Markdown 渲染**：旁白、开场、世界设定、记忆问答、学习小结、场外事件与生成式 UI 文本均按 Markdown（GFM：标题、粗斜体、列表、引用、代码、表格）渲染；不渲染原始 HTML、不加载模型给出的远程图片；流式输出中未闭合的 `**` / `` ` `` / ``` 会临时补齐，避免闪烁。
+
+![世界面板吸顶](docs/screens/fe-27-sticky-world.png)
+![Markdown 渲染](docs/screens/fe-28-markdown.png)
 
 ## 演示脚本
 

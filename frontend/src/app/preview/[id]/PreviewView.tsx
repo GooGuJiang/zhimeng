@@ -1,5 +1,6 @@
 "use client";
 /** 世界预览 (F1): map, characters, initial conflict; confirm → play, or regenerate in place (SSE). */
+import { Markdown } from "@/components/Markdown";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { RefreshCw, DoorOpen } from "lucide-react";
@@ -144,9 +145,7 @@ export function PreviewView({ id }: { id: string }) {
           </div>
         </div>
       </div>
-      <p className="lead serif" style={{ marginTop: 0 }}>
-        {world.premise || world.setting}
-      </p>
+      <Markdown className="lead serif" text={world.premise || world.setting} />
 
       {enriching ? (
         <div className="notice row detail-enriching" data-testid="world-detail-enriching" aria-live="polite">
@@ -183,13 +182,9 @@ export function PreviewView({ id }: { id: string }) {
               <i className="knot" aria-hidden />
               <h2 className="h2">初始冲突</h2>
             </div>
-            <p className="conflict" data-testid="initial-conflict">
-              {world.initial_conflict}
-            </p>
+            <Markdown className="conflict" testId="initial-conflict" text={world.initial_conflict} />
             {world.opening_scene ? (
-              <p className="muted serif" style={{ marginTop: 16, whiteSpace: "pre-wrap" }}>
-                {world.opening_scene}
-              </p>
+              <Markdown className="muted serif md-gap" text={world.opening_scene} />
             ) : null}
           </section>
         </div>
@@ -210,9 +205,7 @@ export function PreviewView({ id }: { id: string }) {
                 <i className="knot" aria-hidden />
                 <h2 className="h2">时代与规则</h2>
               </div>
-              <p className="muted" style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                {world.setting}
-              </p>
+              <Markdown className="muted" text={world.setting} />
             </section>
           ) : null}
           {world.mode === "education" && world.knowledge_cards?.length ? (
