@@ -196,6 +196,7 @@ class Turn(BaseModel):
     facts: list[str] = Field(default_factory=list)
     asset_ids: list[str] = Field(default_factory=list)
     key_scene: bool = False
+    source: Literal["llm", "fallback"] = "llm"  # 旁白来源：模型链全部失败时为 fallback（本地模板）
     created_at: str = ""
     ai_generated: bool = True
     ai_label: str = AI_LABEL

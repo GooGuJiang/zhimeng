@@ -85,7 +85,8 @@ async def import_save(save: dict[str, Any] = Body(...)):
             s.add(TurnRow(id=repo.new_id("t"), world_id=wid, index=int(t["index"]), chapter=int(t.get("chapter", 1)),
                           action=t.get("action", ""), narration=t.get("narration", ""), options=t.get("options") or [],
                           facts=t.get("facts") or [], event_ids=[ev_map[e["id"]] for e in t.get("events") or [] if e.get("id") in ev_map],
-                          key_scene=bool(t.get("key_scene")), state_before=snap, created_at=_dt(t.get("created_at"))))
+                          key_scene=bool(t.get("key_scene")), source=str(t.get("source") or "llm"), state_before=snap,
+                          created_at=_dt(t.get("created_at"))))
         for sm in save.get("summaries") or []:
             s.add(SummaryRow(id=repo.new_id("sm"), world_id=wid, chapter=int(sm["chapter"]), from_turn=int(sm["from_turn"]),
                              to_turn=int(sm["to_turn"]), summary=sm.get("summary", "")))

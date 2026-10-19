@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # 实时回合延迟预算（首字 ≤2s 目标）：叙事前的世界/角色 Agent 与记忆向量检索超时即用本地规则，不拖慢旁白
     agent_budget_s: float = 2.0
     retrieval_budget_s: float = 1.2
+    # 非流式 LLM 调用（小结/问答/抽取/测验）的总时限：超时走本地兜底，避免代理 socket hang up（BUG-007）
+    sync_llm_timeout_s: float = 8.0
+    # 安全审核单次调用时限：超时退回关键词/规则层
+    guard_timeout_s: float = 6.0
     model_cooldown_s: float = 30.0       # 限流/断连后该模型冷却时间（期间优先跳过）
     embedding_model: str = "text-embedding-v3"
     embedding_dim: int = 1024

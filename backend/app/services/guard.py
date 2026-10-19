@@ -7,6 +7,7 @@ TEAM.md 约定的签名是 ``check_input(text, *, minor_mode, rating, context)``
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from typing import Any
@@ -45,11 +46,25 @@ def _coerce(res: Any) -> SafetyResult:
     return SafetyResult.model_validate(res, from_attributes=True)
 
 
+async def _timed(fn: Any, text: str, kw: dict[str, Any], *, minor_mode: bool, output: bool) -> Any:
+    """审核调用时限（guard_timeout_s）：超时（多为大模型审核被限流/断连）→ 只走关键词/规则层（use_llm=False），
+    安全模块不支持该参数时 → fail-safe 关键词检查。不会因超时直接放行。"""
+    from app.config import get_settings
+    try:
+        return await asyncio.wait_for(fn(text, **kw), timeout=get_settings().guard_timeout_s)
+    except asyncio.TimeoutError:
+        log.warning("safety call exceeded %.1fs → rules-only check", get_settings().guard_timeout_s)
+        if "use_llm" in inspect.signature(fn).parameters:
+            return await fn(text, **{**kw, "use_llm": False})
+        return _failsafe(text, minor_mode=minor_mode, output=output)
+
+
 async def check_input(text: str, *, minor_mode: bool = False, rating: str = "teen",
                       context: str = "turn") -> SafetyResult:
     fn = safety.check_input
     try:
-        return _coerce(await fn(text, **_kwargs(fn, minor_mode=minor_mode, rating=rating, context=context)))
+        return _coerce(await _timed(fn, text, _kwargs(fn, minor_mode=minor_mode, rating=rating, context=context),
+                                    minor_mode=minor_mode, output=False))
     except Exception as e:  # noqa: BLE001
         log.exception("safety.check_input failed → fail-safe keyword check: %s", e)
         return _failsafe(text, minor_mode=minor_mode, output=False)
@@ -60,7 +75,8 @@ async def check_output(text: str, *, minor_mode: bool = False, rating: str = "te
     """use_llm=False：只走关键词/规则层（秒级预览用）；None：由安全模块默认策略决定。"""
     fn = safety.check_output
     try:
-        return _coerce(await fn(text, **_kwargs(fn, minor_mode=minor_mode, rating=rating, context=None, use_llm=use_llm)))
+        return _coerce(await _timed(fn, text, _kwargs(fn, minor_mode=minor_mode, rating=rating, context=None, use_llm=use_llm),
+                                    minor_mode=minor_mode, output=True))
     except Exception as e:  # noqa: BLE001
         log.exception("safety.check_output failed → fail-safe keyword check: %s", e)
         return _failsafe(text, minor_mode=minor_mode, output=True)

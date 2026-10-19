@@ -21,7 +21,10 @@ def _chunks(text: str, size: int = 3) -> list[str]:
 async def narrate_stream(world: World, action: str, *, memory_ctx: str, recent: str, npc_ctx: str,
                          events_ctx: str, inject_ctx: str, focus: Any, event_lines: list[str],
                          injects: list[str], turn: int) -> AsyncIterator[tuple[str, str]]:
-    """产出 (source, chunk)。LLM 流在首字前失败 → 本地模板；首字后失败 → 抛 LLMUnavailable（回合不提交，可重试）。"""
+    """产出 (source, chunk)，source ∈ llm | fallback | reset。
+
+    LLM 流在首字前整条模型链失败 → 本地模板；首字后断流先续写（chat_stream_resumable），续写也用尽 →
+    产出一次 ``("reset", 原因)``，随后用本地模板**整段重写**（调用方据此通知前端清空已显示的半段旁白；BUG-006）。"""
     if llm_enabled():
         msgs = prompts.director_messages(world, action, memory_ctx, recent, npc_ctx, events_ctx, inject_ctx,
                                          world.minor_mode)
@@ -32,10 +35,12 @@ async def narrate_stream(world: World, action: str, *, memory_ctx: str, recent: 
                 yield "llm", chunk
             if got:
                 return
-        except LLMUnavailable:
+        except LLMUnavailable as e:
             if got:
-                raise
-            log.warning("director stream failed before first token → fallback narration")
+                log.warning("director stream failed mid-way (%s) → local template rewrite", e)
+                yield "reset", "模型连接中断，已改用本地模板重写本回合"
+            else:
+                log.warning("director stream failed before first token → fallback narration")
     text = fallback.narrate(world, action, focus, event_lines, injects, turn)
     for c in _chunks(text):
         yield "fallback", c
@@ -71,7 +76,7 @@ def fallback_extract(world: World, action: str, narration: str, focus: Any) -> d
 async def extract(world: World, action: str, narration: str, focus: Any) -> dict[str, Any]:
     if llm_enabled():
         d = await chat_json(prompts.extract_messages(world, action, narration), model=get_settings().fast_model,
-                            temperature=0.2, max_tokens=900)
+                            temperature=0.2, max_tokens=900, deadline=get_settings().sync_llm_timeout_s)
         if d:
             base = fallback_extract(world, action, narration, focus)
             for k in base:
@@ -87,7 +92,7 @@ async def chapter_summary(world: World, chapter: int, turns: list[Any]) -> str:
     text = "\n".join(f"[第{t.index}回合] 行动：{t.action}\n{t.narration}" for t in turns)
     if llm_enabled():
         out = await chat_text(prompts.summary_messages(world, chapter, text), model=get_settings().fast_model,
-                              temperature=0.3, max_tokens=300)
+                              temperature=0.3, max_tokens=300, deadline=get_settings().sync_llm_timeout_s)
         if out and out.strip():
             return out.strip()[:400]
     acts = "；".join(fallback.second_person(t.action) for t in turns)
@@ -101,7 +106,8 @@ async def answer_question(world: World, question: str, cites: list[Citation]) ->
     numbered = "\n".join(f"[{i + 1}]（{c.source}）{c.content}" for i, c in enumerate(cites))
     if llm_enabled():
         out = await chat_text(prompts.memory_answer_messages(world, question, numbered),
-                              model=get_settings().fast_model, temperature=0.2, max_tokens=300)
+                              model=get_settings().fast_model, temperature=0.2, max_tokens=300,
+                              deadline=get_settings().sync_llm_timeout_s)
         if out and out.strip():
             return out.strip()
     top = cites[:2]
@@ -109,11 +115,14 @@ async def answer_question(world: World, question: str, cites: list[Citation]) ->
     return f"根据世界记忆：{body}。（出处：{'、'.join(c.source for c in top)}）"
 
 
-async def education_summary(world: World, timeline: list[dict[str, Any]]) -> dict[str, Any]:
+async def education_summary(world: World, timeline: list[dict[str, Any]], *, use_llm: bool = True,
+                            deadline: float | None = None) -> dict[str, Any]:
+    """学习小结 + 测验。LLM 版用快速模型、只取最近 20 回合的短摘要（BUG-007 提速）；``deadline`` 超时或失败 → 本地版。"""
     cards = world.knowledge_cards
-    if llm_enabled() and cards:
-        tl = "\n".join(f"第{t['turn']}回合：{t['summary']}" for t in timeline)
-        d = await chat_json(prompts.education_summary_messages(world, tl), temperature=0.3, max_tokens=1500)
+    if use_llm and llm_enabled() and cards:
+        tl = "\n".join(f"第{t['turn']}回合：{t['summary'][:40]}" for t in timeline[-20:])
+        d = await chat_json(prompts.education_summary_messages(world, tl), model=get_settings().fast_model,
+                            temperature=0.3, max_tokens=1000, deadline=deadline)
         quiz = []
         for q in (d or {}).get("quiz") or []:
             try:

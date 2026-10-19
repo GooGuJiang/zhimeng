@@ -78,6 +78,7 @@ class TurnCtx:
         self.arrived: str | None = None
         self.recent = ""
         self.tasks: dict[str, asyncio.Task[Any]] = {}
+        self.source = "fallback"  # 旁白来源：llm | fallback（写入 Turn.source）
 
 
 class TurnState(TypedDict, total=False):
@@ -170,10 +171,20 @@ def _start_prefetch(ctx: TurnCtx) -> None:
     query = f"{ctx.action} {loc.name if loc else ''} " + " ".join(r.summary for r in ctx.injects)
     every = max(1, get_settings().npc_batch_every)
     ctx.tasks = {
-        "memory": asyncio.create_task(store.search(w.id, query, top_k=5, before_turn=ctx.index)),
+        "memory": asyncio.create_task(_budgeted_search(w.id, query, ctx.index)),
         "world": asyncio.create_task(simulation.world_agent_tick(w, ctx.recent, with_event=ctx.index % every == 0)),
         "npcs": asyncio.create_task(_npc_job(ctx)),
     }
+
+
+async def _budgeted_search(world_id: str, query: str, before: int) -> list[Citation]:
+    """记忆检索整体限时（含远程向量与索引回填）；超时 → 本地哈希向量 + 词法检索。"""
+    try:
+        return await asyncio.wait_for(store.search(world_id, query, top_k=5, before_turn=before),
+                                      timeout=get_settings().retrieval_budget_s * 2)
+    except asyncio.TimeoutError:
+        log.info("memory search over budget → local hash/lexical retrieval")
+        return await store.search(world_id, query, top_k=5, before_turn=before, remote=False)
 
 
 def _cancel_prefetch(ctx: TurnCtx) -> None:
@@ -262,6 +273,11 @@ async def node_director(state: TurnState) -> TurnState:
             w, ctx.action, memory_ctx=memory_ctx, recent=ctx.recent, npc_ctx=focus_line, events_ctx=events_ctx,
             inject_ctx=inject_ctx, focus=ctx.focus, event_lines=[e.summary for e in off],
             injects=[r.summary for r in ctx.injects], turn=ctx.index):
+        if src == "reset":  # 半段 LLM 旁白作废：通知前端清空，随后的 fallback token 为整段重写（以 done.turn.narration 为准）
+            raw, cf = [], guard.ChunkFilter(minor_mode=w.minor_mode)
+            await ctx.emit("progress", {"stage": "fallback", "message": chunk, "pct": 60, "percent": 60, "reset": True})
+            continue
+        ctx.source = src
         raw.append(chunk)
         out = cf.feed(chunk)
         if out:
@@ -390,6 +406,7 @@ async def node_persist(state: TurnState) -> TurnState:
         with session_scope() as s:
             s.add(TurnRow(id=turn_id, world_id=w.id, index=ctx.index, chapter=ctx.chapter, action=ctx.action,
                           narration=ctx.narration, options=[o.model_dump() for o in ctx.options], facts=facts,
+                          source=ctx.source,
                           event_ids=[e.id for e in ctx.events], key_scene=key, client_turn_id=ctx.client_turn_id,
                           state_before={"world": ctx.snapshot, "consumed": inject_ids, "option_id": ctx.option_id}))
         base = {"turn": ctx.index, "chapter": ctx.chapter}

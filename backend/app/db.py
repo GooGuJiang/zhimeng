@@ -56,6 +56,7 @@ class TurnRow(SQLModel, table=True):
     event_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     asset_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     key_scene: bool = False
+    source: str = "llm"  # 旁白来源 llm | fallback
     client_turn_id: str | None = Field(default=None, index=True)
     state_before: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # snapshot for retry
     created_at: datetime = Field(default_factory=utcnow)
@@ -161,7 +162,7 @@ def get_engine():
 
 
 # 轻量迁移：给旧库补新增列（SQLite create_all 不会改已有表）
-_MIGRATIONS = {"events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")]}
+_MIGRATIONS = {"turns": [("source", "VARCHAR DEFAULT 'llm'")], "events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")]}
 
 
 def _migrate(engine) -> None:  # noqa: ANN001

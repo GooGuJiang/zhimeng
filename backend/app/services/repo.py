@@ -123,7 +123,8 @@ def mark_events(ids: list[str], *, seen: bool | None = None, consumed: bool | No
 def turn_out(r: TurnRow, events: list[WorldEvent] | None = None) -> Turn:
     return Turn(id=r.id, world_id=r.world_id, index=r.index, chapter=r.chapter, action=r.action,
                 narration=r.narration, options=[Option(**o) for o in r.options], events=events or [],
-                facts=r.facts, asset_ids=r.asset_ids, key_scene=r.key_scene, created_at=iso(r.created_at))
+                facts=r.facts, asset_ids=r.asset_ids, key_scene=r.key_scene,
+                source="fallback" if r.source == "fallback" else "llm", created_at=iso(r.created_at))
 
 
 def list_turns(world_id: str, limit: int = 50) -> list[Turn]:

@@ -85,7 +85,11 @@ class _Attempts:
 
     def __iter__(self):
         retries = max(0, get_settings().llm_retries)
-        for m in model_chain(self.primary):
+        chain = model_chain(self.primary)
+        now = time.monotonic()
+        ready = [m for m in chain if _cooldown.get(m, 0) <= now]
+        # 冷却中的模型不再逐个撞（429 风暴时省掉整条链的等待）；全部冷却 → 只试最早解冻的一个
+        for m in ready or sorted(chain, key=lambda x: _cooldown.get(x, 0))[:1]:
             self.conn = False
             yield m
             n = 0
@@ -155,8 +159,17 @@ def parse_json(text: str) -> dict[str, Any] | None:
 
 async def chat_text(messages: list[dict[str, str]], model: str | None = None,
                     temperature: float = 0.8, max_tokens: int = 1500, json_mode: bool = False,
-                    meta: dict[str, Any] | None = None) -> str | None:
-    """非流式调用；按备用模型链切换。``meta`` 可回传实际使用的模型。"""
+                    meta: dict[str, Any] | None = None, deadline: float | None = None) -> str | None:
+    """非流式调用；按备用模型链切换。``meta`` 可回传实际使用的模型。
+    ``deadline``：整条模型链的总时限（秒），超时返回 None（调用方走本地兜底）。"""
+    if deadline:
+        try:
+            return await asyncio.wait_for(chat_text(messages, model, temperature, max_tokens, json_mode, meta),
+                                          timeout=deadline)
+        except asyncio.TimeoutError:
+            STATS["last_error"] = f"deadline {deadline:.0f}s exceeded"
+            log.warning("LLM call exceeded deadline %.1fs → local fallback", deadline)
+            return None
     s = get_settings()
     if not s.llm_enabled:
         return None
@@ -184,8 +197,8 @@ async def chat_text(messages: list[dict[str, str]], model: str | None = None,
 
 async def chat_json(messages: list[dict[str, str]], model: str | None = None,
                     temperature: float = 0.7, max_tokens: int = 3000,
-                    meta: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    text = await chat_text(messages, model, temperature, max_tokens, json_mode=True, meta=meta)
+                    meta: dict[str, Any] | None = None, deadline: float | None = None) -> dict[str, Any] | None:
+    text = await chat_text(messages, model, temperature, max_tokens, json_mode=True, meta=meta, deadline=deadline)
     data = parse_json(text or "")
     if text and data is None:
         STATS["last_error"] = "invalid JSON from model"

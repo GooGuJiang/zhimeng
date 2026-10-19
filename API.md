@@ -60,6 +60,7 @@ type WorldEvent = { id: string; world_id: string; type: "offscreen"|"world"|"pla
 type Citation = { fact_id: string; content: string; turn: number; chapter: number; kind: string; score: number; source: string /* e.g. "第2章·第5回合" */ }
 type Turn = { id: string; world_id: string; index: number; chapter: number; action: string; narration: string;
               options: Option[]; events: WorldEvent[]; facts: string[]; asset_ids: string[]; key_scene: boolean;
+              source: "llm" | "fallback";   // v1.2: "fallback" = whole model chain failed, local template narration
               created_at: string; ai_generated: true; ai_label: string }
 type Asset = { id: string; world_id: string; type: "image"|"audio"; url: string /* /api/static/assets/<file> */; turn_id: string|null;
                prompt: string; source: "dashscope"|"fallback"; created_at: string }
@@ -132,6 +133,10 @@ an illustration **and** a narrator audio (`opening_scene`, passed through `check
 Body: `{ "action": "我去码头找线人", "option_id": "opt_2" | null, "client_turn_id": "uuid?" }`
 (`client_turn_id` is an idempotency key: re-sending a committed id returns the committed turn as `done` immediately.)
 Events in order: `progress`(stages `safety`,`memory`,`world`,`npc`,`director`,`narrate`,`extract`,`persist`) → `memory` → `event` → `token`* → `options` → `ui` → `asset`* (key scenes) → `done` `{ "turn": Turn, "state": WorldState }`.
+Model failure (v1.2, BUG-006): the turn never ends in `error` just because the model chain is down. Fails before the first token →
+local template narration (`done.turn.source:"fallback"`). Stream breaks after tokens were sent → the server first resumes by continuation;
+if that is exhausted it emits `progress {"stage":"fallback","reset":true,"message":…}` — **clear the narration shown so far** — then streams
+the full local-template narration. `done.turn.narration` is always authoritative. `error` remains only for non-model failures (retryable).
 `token` granularity (v1.2): real-model deltas are passed through as they arrive (only the last 8 chars are held back for the safety filter
 and flushed at the end); fallback narration is sent in 3-char chunks paced by `STREAM_DELAY`.
 On `error` nothing is committed; resend the same body (or use retry below).
@@ -183,7 +188,10 @@ Input blocked → turn/generate stream emits `safety` (blocked=true) then `done 
 ### F10 Education mode
 `POST /api/education/generate` (SSE) body `{ "source_text": "课文/史料原文", "title"?: str, "subject"?: "语文|历史|非遗|...", "grade"?: str, "minor_mode"?: true }` → same events as world generation; World has `mode: "education"` and `knowledge_cards`.
 `GET /api/worlds/{id}/education/cards` → `KnowledgeCard[]` (cards unlocked so far, incl. ones produced during turns)
-`GET /api/worlds/{id}/education/summary` → `{ "title", "key_points": [str], "cards": KnowledgeCard[], "timeline": [{turn, summary}], "quiz": [{question, options: [str], answer_index: int, explanation}], "reflection": str, "ai_label": str }`
+`GET /api/worlds/{id}/education/summary` → `{ "title", "key_points": [str], "cards": KnowledgeCard[], "timeline": [{turn, summary}], "quiz": [{question, options: [str], answer_index: int, explanation}], "reflection": str, "ai_label": str, "source": "llm"|"fallback", "status": "complete"|"pending" }`
+v1.2 (BUG-007): responds within ~8 s at most. The LLM version runs in a background job (fast model, short input) and is cached per world + turn.
+If it is not ready in time, the response is the local summary with `status:"pending"`; GET again a few seconds later for the LLM version
+(`status:"complete"`). All fields of the old shape are always present.
 
 ## Changelog
 
@@ -212,4 +220,8 @@ Input blocked → turn/generate stream emits `safety` (blocked=true) then `done 
 - `GET /api/reports` requires `world_id`; full list only with `X-Admin-Token` == `ZM_ADMIN_TOKEN` (disabled when unset). **Breaking** for
   callers that listed all reports without `world_id`.
 - Fine-grained `token` deltas (see F2); a real-model narration stream that breaks mid-way is resumed by continuation instead of failing.
+- BUG-006: model failures degrade to local templates (`Turn.source`, `progress.stage="fallback"` + `reset:true`); NPC / world agents / memory Q&A /
+  chapter summaries / extraction also fall back locally.
+- BUG-007: non-streaming LLM calls have a total time limit (`SYNC_LLM_TIMEOUT_S`, default 8 s) and fall back locally; safety checks are capped at
+  `GUARD_TIMEOUT_S` (6 s) and then use the rules-only layer; `/education/summary` adds `status`/`source` (async LLM version).
 - `layout.area` semantics for `event_feed` / `choice_list` (dedicated areas); `World.opening_options` documented.

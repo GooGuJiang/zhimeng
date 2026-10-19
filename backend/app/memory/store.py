@@ -15,6 +15,7 @@ from sqlmodel import col, delete, select
 
 from app.config import get_settings
 from app.db import MemoryRow, session_scope
+from app.llm.client import llm_enabled as llm_ok
 from app.memory.embeddings import embed, hash_embed, tokens
 from app.schemas import Citation, MemoryItem
 
@@ -132,7 +133,7 @@ def _lexical(query: str, text: str) -> float:
 
 
 async def search(world_id: str, query: str, top_k: int = 5, kinds: list[str] | None = None,
-                 before_turn: int | None = None) -> list[Citation]:
+                 before_turn: int | None = None, remote: bool = True) -> list[Citation]:
     """Hybrid retrieval: Chroma vector similarity + lexical overlap over the structured table.
     ``before_turn``：只检索该回合之前的记忆（重试最后一回合时排除旧版本）。"""
     rows = {r.id: r for r in list_memories(world_id, limit=5000)
@@ -141,11 +142,15 @@ async def search(world_id: str, query: str, top_k: int = 5, kinds: list[str] | N
     if not rows:
         return []
     try:  # 实时检索预算：远程向量超时 → 本地哈希向量（混合打分里仍有词法分）
+        if not remote:
+            raise asyncio.TimeoutError
         vecs, provider = await asyncio.wait_for(embed([query]), timeout=get_settings().retrieval_budget_s)
     except asyncio.TimeoutError:
         vecs, provider = [hash_embed(query)], "hash"
     scores: dict[str, float] = {}
     try:
+        if provider == "hash" and llm_ok():  # 有 Key 但向量超时：直接哈希打分（回填索引会再次远程 embed）
+            raise RuntimeError("local hash retrieval")
         coll = _collection(provider)
         indexed = coll.get(where={"world_id": world_id}, include=[])["ids"]
         missing = [rows[i] for i in rows if i not in set(indexed)]
@@ -156,7 +161,8 @@ async def search(world_id: str, query: str, top_k: int = 5, kinds: list[str] | N
         for mid, dist in zip(res["ids"][0], res["distances"][0]):
             scores[mid] = max(0.0, 1.0 - float(dist))
     except Exception as e:  # noqa: BLE001
-        log.warning("chroma query failed, lexical only: %s", e)
+        if not (provider == "hash" and llm_ok()):
+            log.warning("chroma query failed, lexical only: %s", e)
         qv = hash_embed(query)
         for mid, r in rows.items():
             scores[mid] = sum(a * b for a, b in zip(qv, hash_embed(r.content)))
