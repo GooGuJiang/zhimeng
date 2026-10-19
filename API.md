@@ -160,3 +160,18 @@ Input blocked → turn/generate stream emits `safety` (blocked=true) then `done 
 `POST /api/education/generate` (SSE) body `{ "source_text": "课文/史料原文", "title"?: str, "subject"?: "语文|历史|非遗|...", "grade"?: str, "minor_mode"?: true }` → same events as world generation; World has `mode: "education"` and `knowledge_cards`.
 `GET /api/worlds/{id}/education/cards` → `KnowledgeCard[]` (cards unlocked so far, incl. ones produced during turns)
 `GET /api/worlds/{id}/education/summary` → `{ "title", "key_points": [str], "cards": KnowledgeCard[], "timeline": [{turn, summary}], "quiz": [{question, options: [str], answer_index: int, explanation}], "reflection": str, "ai_label": str }`
+
+## Changelog
+
+### v1.1 (2026-10-19, backend core) — all changes are additive except the static path
+- **Static path**: generated assets are served at `/api/static/assets/<file>`; every `url` / `image_url` field starts with `/api/static/assets/`. `/static/assets/<file>` remains as a deprecated alias (BUG-004).
+- `GET /api/health` also returns `"fallback": bool` (true = local templates, no remote calls).
+- `progress` data also carries `"percent"` (same value as `pct`).
+- Turn `done` for an already-committed `client_turn_id` carries `"idempotent": true`.
+- Turn streams may emit a non-blocking `safety` event (e.g. `crisis=true` hint, or output masked/replaced) before `done`; when the narration was replaced, `done.turn.narration` is authoritative (streamed tokens may differ — render `done.turn.narration` at the end).
+- `UIComponent` also carries `ai_generated: true`, `ai_label`; `openui` is always present (OpenUI Lang 1.0, first line `root = Col([...])`, components from `frontend/openui/system-prompt.txt`). `GET /ui` accepts optional `focus=<type|id>` (that component gets priority 100).
+- `SaveFile` also has `turn_snapshots` (per-turn pre-turn snapshot so imported saves can `retry`), `assets`, `ai_generated`. Import accepts saves without them.
+- `POST /api/reports` response may include `"priority": "high"|"normal"`.
+- `POST /api/worlds/{id}/god/inject` returns HTTP 400 `{detail, code:"bad_request"}` when the content is blocked by safety; `POST /worlds/import` 400 for an invalid save.
+- `POST /api/worlds/{id}/assets/tts` returns 400 if the text fails `check_output`.
+- `regenerate` body: any `GenerateWorldRequest` field; omitted fields keep the original request.

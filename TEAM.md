@@ -56,3 +56,14 @@ def list_assets(world_id: str) -> list[Asset]
 - E2E: `cd tests/e2e && pnpm test` against a running app (`ZM_WEB=http://localhost:3000`). Uses system Chrome.
 - **Frontend: tests select by `data-testid` first, falling back to visible Chinese text.** Requested ids are listed in `tests/e2e/TESTIDS.md`.
 - Bugs go to `BUGS.md` (owner, repro, expected, status). I re-test every ~10 min after `git pull`.
+
+## Backend core notes (2026-10-19)
+- Entry `backend/app/main.py:app`; routes in `backend/app/routes/*`; LangGraph turn graph `backend/app/graph/turn_graph.py`
+  (`safety_in → memory → {world_agent ∥ npc_agents} → director → extract → persist`).
+- Safety calls go through `app/services/guard.py` (signature-tolerant adapter; fail-safe keyword check if `app.safety` raises).
+  Order: `check_input` → `filter_chunk` per streamed chunk (8-char hold-back) → `check_output` on full text → persist `filtered_text`.
+- Multimodal: auto only for key scenes (`multimodal.is_key_scene`: turn 1, first turn of each chapter, injected/high-impact
+  events, ending) + opening illustration on confirm; all calls pass `minor_mode` (`key_scene_assets` reads `world["minor_mode"]`).
+- API.md v1.1 changelog lists contract changes (static path `/api/static/assets`, additive fields).
+- Install deps: `cd backend && uv pip install --python .venv/bin/python -r requirements.txt` (or `-e .`).
+- Backend core tests: `backend/.venv/bin/python -m pytest backend/tests/core -q`.

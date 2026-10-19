@@ -5,6 +5,7 @@ missing or the API fails, so callers can switch to local templates (SRS 5.3).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -80,7 +81,14 @@ async def chat_text(messages: list[dict[str, str]], model: str | None = None,
             _record_error(e)
             if "data_inspection_failed" in str(e) or "inappropriate" in str(e).lower():
                 return None  # provider moderation: do not retry
+            if attempt < s.llm_retries:
+                await asyncio.sleep(_backoff(e, attempt))
     return None
+
+
+def _backoff(e: Exception, attempt: int) -> float:
+    """429 限流退避更久；其余错误短暂等待后重试。"""
+    return (2.0 if "429" in str(e) or "limit" in str(e).lower() else 0.6) * (attempt + 1)
 
 
 async def chat_json(messages: list[dict[str, str]], model: str | None = None,
@@ -98,10 +106,19 @@ async def chat_stream(messages: list[dict[str, str]], model: str | None = None,
     if not s.llm_enabled:
         raise LLMUnavailable("no api key")
     try:
-        STATS["calls"] += 1
-        stream = await get_client().chat.completions.create(
-            model=model or s.chat_model, messages=messages, temperature=temperature,
-            max_tokens=max_tokens, stream=True)
+        stream = None
+        for attempt in range(s.llm_retries + 1):  # 只在首字前重试（建立连接/限流），已输出后不重试
+            try:
+                STATS["calls"] += 1
+                stream = await get_client().chat.completions.create(
+                    model=model or s.chat_model, messages=messages, temperature=temperature,
+                    max_tokens=max_tokens, stream=True)
+                break
+            except Exception as e:  # noqa: BLE001
+                if attempt >= s.llm_retries or "data_inspection_failed" in str(e):
+                    raise
+                _record_error(e)
+                await asyncio.sleep(_backoff(e, attempt))
         async for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
