@@ -30,11 +30,17 @@ function statusPanel(p: Anyish): string[] {
   const meters = [`Meter("体力", ${num(player.hp, 100)}, 100, "rose")`];
   Object.entries(stats)
     .slice(0, 5)
-    .forEach(([k, v], i) => meters.push(`Meter(${lit(k)}, ${num(v)}, ${num(v) > 100 ? Math.ceil(num(v) / 50) * 50 : 100}, "${STAT_TONES[i % 4]}")`));
+    .forEach(([k, v], i) =>
+      meters.push(
+        `Meter(${lit(k)}, ${num(v)}, ${num(v) > 100 ? Math.ceil(num(v) / 50) * 50 : 100}, "${STAT_TONES[i % 4]}")`,
+      ),
+    );
   lines.push(`meters = Col([${meters.join(", ")}], 2)`);
   const tags = arr<string>(p.tags).slice(0, 8);
   const moodTag = player.mood ? [`Badge(${lit("心境 · " + str(player.mood))}, "azure")`] : [];
-  lines.push(`tags = Row([${[...moodTag, ...tags.map((t) => `Badge(${lit(str(t))}, "muted")`)].join(", ")}], 2)`);
+  lines.push(
+    `tags = Row([${[...moodTag, ...tags.map((t) => `Badge(${lit(str(t))}, "muted")`)].join(", ")}], 2)`,
+  );
   return lines;
 }
 
@@ -102,12 +108,18 @@ function knowledge(p: Anyish): string[] {
   return [
     `root = Col([g])`,
     `g = Grid([${cards.map((_, i) => `k${i}`).join(", ")}], 2)`,
-    ...cards.map((c, i) => `k${i} = KnowledgeCard(${lit(str(c.title))}, ${lit(str(c.content))}, ${lit(str(c.source))})`),
+    ...cards.map(
+      (c, i) => `k${i} = KnowledgeCard(${lit(str(c.title))}, ${lit(str(c.content))}, ${lit(str(c.source))})`,
+    ),
   ];
 }
 
 function choices(p: Anyish): string[] {
-  const options = arr<Option>(p.options).map((o) => ({ id: str(o.id), text: str(o.text), hint: str(o.hint) }));
+  const options = arr<Option>(p.options).map((o) => ({
+    id: str(o.id),
+    text: str(o.text),
+    hint: str(o.hint),
+  }));
   return [`root = Col([c])`, `c = Choices(${lit(options)})`];
 }
 
@@ -148,8 +160,10 @@ export function compileComponent(c: UIComponent): string {
     const btn = (a: Anyish) => {
       const payload = (a.payload ?? {}) as Anyish;
       const label = str(a.label);
-      if (a.kind === "god_inject") return `Button(${lit(label)}, @Inject(${lit(str(payload.content, label))}), "ghost")`;
-      if (a.kind === "query") return `Button(${lit(label)}, @Ask(${lit(str(payload.question, label))}), "ghost")`;
+      if (a.kind === "god_inject")
+        return `Button(${lit(label)}, @Inject(${lit(str(payload.content, label))}), "ghost")`;
+      if (a.kind === "query")
+        return `Button(${lit(label)}, @Ask(${lit(str(payload.question, label))}), "ghost")`;
       return `Button(${lit(label)}, @Act(${lit(str(payload.action, label))}), "ghost")`;
     };
     lines.push(`acts = Row([${acts.slice(0, 4).map(btn).join(", ")}], 2)`);

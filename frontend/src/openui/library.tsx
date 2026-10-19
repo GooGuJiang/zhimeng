@@ -46,17 +46,17 @@ function useAct() {
 // ---------- actions ----------
 export const Act = defineAction({
   name: "Act",
-  description: "Advance the story: the player performs this action, e.g. @Act(\"去码头找线人\").",
+  description: 'Advance the story: the player performs this action, e.g. @Act("去码头找线人").',
   params: z.object({ text: z.string() }),
 });
 export const Ask = defineAction({
   name: "Ask",
-  description: "Ask the world memory a question about past events, e.g. @Ask(\"线人叫什么名字？\").",
+  description: 'Ask the world memory a question about past events, e.g. @Ask("线人叫什么名字？").',
   params: z.object({ question: z.string() }),
 });
 export const Inject = defineAction({
   name: "Inject",
-  description: "God view: inject a world event, e.g. @Inject(\"码头突发大火\").",
+  description: 'God view: inject a world event, e.g. @Inject("码头突发大火").',
   params: z.object({ content: z.string() }),
 });
 
@@ -74,7 +74,11 @@ export const Col = defineComponent({
 export const Row = defineComponent({
   name: "Row",
   description: "Horizontal row, wraps on narrow screens.",
-  props: z.object({ children, gap: z.number().optional(), justify: z.enum(["start", "between", "end"]).optional() }),
+  props: z.object({
+    children,
+    gap: z.number().optional(),
+    justify: z.enum(["start", "between", "end"]).optional(),
+  }),
   component: ({ props, renderNode }) => (
     <div
       className="zu-row"
@@ -93,7 +97,10 @@ export const Grid = defineComponent({
   description: "Responsive grid of equal columns (default 2); collapses on phones.",
   props: z.object({ children, columns: z.number().optional() }),
   component: ({ props, renderNode }) => (
-    <div className="zu-grid" style={{ ["--cols" as string]: String(Math.max(1, Math.min(6, props.columns ?? 2))) }}>
+    <div
+      className="zu-grid"
+      style={{ ["--cols" as string]: String(Math.max(1, Math.min(6, props.columns ?? 2))) }}
+    >
       {renderNode(props.children)}
     </div>
   ),
@@ -101,7 +108,12 @@ export const Grid = defineComponent({
 export const Panel = defineComponent({
   name: "Panel",
   description: "A titled card section. tone tints its accent.",
-  props: z.object({ children, title: z.string().optional(), tone: tone.optional(), icon: z.string().optional() }),
+  props: z.object({
+    children,
+    title: z.string().optional(),
+    tone: tone.optional(),
+    icon: z.string().optional(),
+  }),
   component: ({ props, renderNode }) => (
     <section className={cx("zu-panel", `t-${props.tone ?? "gold"}`)}>
       {props.title ? (
@@ -140,14 +152,20 @@ export const Badge = defineComponent({
   name: "Badge",
   description: "Small tag such as a mood, a status or a time label.",
   props: z.object({ text: z.string(), tone: tone.optional() }),
-  component: ({ props }) => <span className={cx("zu-badge", `t-${props.tone ?? "muted"}`)}>{props.text}</span>,
+  component: ({ props }) => (
+    <span className={cx("zu-badge", `t-${props.tone ?? "muted"}`)}>{props.text}</span>
+  ),
 });
 
 // ---------- data ----------
 export const Stat = defineComponent({
   name: "Stat",
-  description: "A labelled value, e.g. Stat(\"第\", \"3 章\").",
-  props: z.object({ label: z.string(), value: z.union([z.string(), z.number()]), hint: z.string().optional() }),
+  description: 'A labelled value, e.g. Stat("第", "3 章").',
+  props: z.object({
+    label: z.string(),
+    value: z.union([z.string(), z.number()]),
+    hint: z.string().optional(),
+  }),
   component: ({ props }) => (
     <div className="zu-stat">
       <span className="zu-stat-l">{props.label}</span>
@@ -159,8 +177,13 @@ export const Stat = defineComponent({
 export const Meter = defineComponent({
   name: "Meter",
   description: "A labelled bar for a stat (hp, 线索, 声望...). max defaults to 100.",
-  props: z.object({ label: z.string(), value: z.number(), max: z.number().optional(), tone: tone.optional() }),
-  component: ({ props }) => {
+  props: z.object({
+    label: z.string(),
+    value: z.number(),
+    max: z.number().optional(),
+    tone: tone.optional(),
+  }),
+  component: function MeterView({ props }) {
     const max = props.max && props.max > 0 ? props.max : 100;
     const pct = Math.max(0, Math.min(100, (Number(props.value) / max) * 100));
     return (
@@ -172,7 +195,13 @@ export const Meter = defineComponent({
             <small>/{max}</small>
           </span>
         </div>
-        <div className="zu-meter-track" role="meter" aria-valuenow={props.value} aria-valuemax={max} aria-label={props.label}>
+        <div
+          className="zu-meter-track"
+          role="meter"
+          aria-valuenow={props.value}
+          aria-valuemax={max}
+          aria-label={props.label}
+        >
           <div className="zu-meter-fill" style={{ width: `${pct}%` }} />
         </div>
       </div>
@@ -188,7 +217,7 @@ export const Button = defineComponent({
     action: action().optional(),
     variant: z.enum(["solid", "ghost"]).optional(),
   }),
-  component: ({ props }) => {
+  component: function ButtonView({ props }) {
     const trigger = useTriggerAction();
     const streaming = useIsStreaming();
     const label = String(props.label ?? "");
@@ -232,9 +261,12 @@ export const RelationGraph = defineComponent({
   description:
     "Interactive character relationship graph. nodes [{id,label,role?,mood?,emoji?,is_player?}], edges [{source,target,type?,affinity -100..100}]. Tap a node for details.",
   props: z.object({ nodes: z.array(nodeSchema), edges: z.array(edgeSchema).optional() }),
-  component: ({ props }) => {
+  component: function RelationGraphView({ props }) {
     const { act, streaming } = useAct();
-    const nodes = useMemo(() => (Array.isArray(props.nodes) ? props.nodes.filter((n) => n && n.id) : []), [props.nodes]);
+    const nodes = useMemo(
+      () => (Array.isArray(props.nodes) ? props.nodes.filter((n) => n && n.id) : []),
+      [props.nodes],
+    );
     const edges = Array.isArray(props.edges) ? props.edges.filter(Boolean) : [];
     const [sel, setSel] = useState<string | null>(null);
     // Player in the centre, everyone else on a ring.
@@ -287,7 +319,12 @@ export const RelationGraph = defineComponent({
             <button
               key={n.id}
               type="button"
-              className={cx("zu-node", n.is_player && "me", sel === n.id && "on", sel && sel !== n.id && "dim")}
+              className={cx(
+                "zu-node",
+                n.is_player && "me",
+                sel === n.id && "on",
+                sel && sel !== n.id && "dim",
+              )}
               style={{ left: `${p.x}%`, top: `${p.y}%` }}
               onClick={() => setSel(sel === n.id ? null : n.id)}
               aria-pressed={sel === n.id}
@@ -322,7 +359,12 @@ export const RelationGraph = defineComponent({
               })}
             </ul>
             {!selected.is_player ? (
-              <button type="button" className="zu-btn sm" disabled={streaming} onClick={() => act(`去找${selected.label}谈谈`)}>
+              <button
+                type="button"
+                className="zu-btn sm"
+                disabled={streaming}
+                onClick={() => act(`去找${selected.label}谈谈`)}
+              >
                 去找{selected.label}谈谈
               </button>
             ) : null}
@@ -351,7 +393,7 @@ export const WorldMap = defineComponent({
     edges: z.array(z.object({ source: z.string(), target: z.string() })).optional(),
     current: z.string().optional(),
   }),
-  component: ({ props }) => {
+  component: function WorldMapView({ props }) {
     const { act, streaming } = useAct();
     const locs = Array.isArray(props.locations) ? props.locations.filter((l) => l && l.id) : [];
     const [sel, setSel] = useState<string | null>(null);
@@ -373,14 +415,7 @@ export const WorldMap = defineComponent({
             const b = byId.get(e.target);
             if (!a || !b) return null;
             return (
-              <line
-                key={i}
-                x1={P(a.x)}
-                y1={P(a.y) * 0.7}
-                x2={P(b.x)}
-                y2={P(b.y) * 0.7}
-                className="zu-road"
-              />
+              <line key={i} x1={P(a.x)} y1={P(a.y) * 0.7} x2={P(b.x)} y2={P(b.y) * 0.7} className="zu-road" />
             );
           })}
         </svg>
@@ -406,7 +441,12 @@ export const WorldMap = defineComponent({
             {s.description ? <p className="zu-text s-xs c-muted">{s.description}</p> : null}
             {s.characters?.length ? <p className="zu-text s-xs">在场：{s.characters.join("、")}</p> : null}
             {s.id !== props.current ? (
-              <button type="button" className="zu-btn sm" disabled={streaming} onClick={() => act(`前往${s.name}`)}>
+              <button
+                type="button"
+                className="zu-btn sm"
+                disabled={streaming}
+                onClick={() => act(`前往${s.name}`)}
+              >
                 前往{s.name}
               </button>
             ) : null}
@@ -426,9 +466,10 @@ const itemSchema = z.object({
 });
 export const Inventory = defineComponent({
   name: "Inventory",
-  description: "The player's bag. items [{name, description?, quantity?, icon?}]. Tap an item to inspect or use it.",
+  description:
+    "The player's bag. items [{name, description?, quantity?, icon?}]. Tap an item to inspect or use it.",
   props: z.object({ items: z.array(itemSchema) }),
-  component: ({ props }) => {
+  component: function InventoryView({ props }) {
     const { act, streaming } = useAct();
     const items = Array.isArray(props.items) ? props.items.filter((i) => i && i.name) : [];
     const [sel, setSel] = useState<number | null>(null);
@@ -458,10 +499,20 @@ export const Inventory = defineComponent({
             <strong>{s.name}</strong>
             {s.description ? <p className="zu-text s-xs c-muted">{s.description}</p> : null}
             <div className="zu-row" style={{ gap: 8 }}>
-              <button type="button" className="zu-btn sm" disabled={streaming} onClick={() => act(`使用${s.name}`)}>
+              <button
+                type="button"
+                className="zu-btn sm"
+                disabled={streaming}
+                onClick={() => act(`使用${s.name}`)}
+              >
                 使用
               </button>
-              <button type="button" className="zu-btn sm ghost" disabled={streaming} onClick={() => act(`仔细查看${s.name}`)}>
+              <button
+                type="button"
+                className="zu-btn sm ghost"
+                disabled={streaming}
+                onClick={() => act(`仔细查看${s.name}`)}
+              >
                 查看
               </button>
             </div>
@@ -474,8 +525,14 @@ export const Inventory = defineComponent({
 
 export const EventLine = defineComponent({
   name: "EventLine",
-  description: 'One timeline entry: summary, time label, kind "offscreen"|"world"|"player"|"injected"|"npc_action".',
-  props: z.object({ summary: z.string(), time: z.string().optional(), kind: z.string().optional(), impact: z.string().optional() }),
+  description:
+    'One timeline entry: summary, time label, kind "offscreen"|"world"|"player"|"injected"|"npc_action".',
+  props: z.object({
+    summary: z.string(),
+    time: z.string().optional(),
+    kind: z.string().optional(),
+    impact: z.string().optional(),
+  }),
   component: ({ props }) => (
     <div className={cx("zu-evt", `k-${props.kind ?? "world"}`)}>
       <span className="zu-evt-dot" aria-hidden />
@@ -490,7 +547,10 @@ export const EventLine = defineComponent({
 });
 export function kindLabel(k?: string) {
   return (
-    { offscreen: "场外", world: "世界", player: "你", injected: "天意", npc_action: "人物" } as Record<string, string>
+    { offscreen: "场外", world: "世界", player: "你", injected: "天意", npc_action: "人物" } as Record<
+      string,
+      string
+    >
   )[k ?? ""];
 }
 
@@ -504,7 +564,13 @@ export const KnowledgeCard = defineComponent({
 function FlipCard({ title, content, source }: { title: string; content: string; source?: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <button type="button" className={cx("zu-kc", open && "open")} onClick={() => setOpen(!open)} aria-expanded={open}>
+    <button
+      type="button"
+      className={cx("zu-kc", open && "open")}
+      onClick={() => setOpen(!open)}
+      aria-expanded={open}
+      data-testid="knowledge-card"
+    >
       <span className="zu-kc-inner">
         <span className="zu-kc-front">
           <span className="zu-kc-tag">知识点</span>
@@ -523,13 +589,21 @@ function FlipCard({ title, content, source }: { title: string; content: string; 
 export const Choices = defineComponent({
   name: "Choices",
   description: "A list of story choices; each runs @Act with its text. options [{id?, text, hint?}].",
-  props: z.object({ options: z.array(z.object({ id: z.string().optional(), text: z.string(), hint: z.string().optional() })) }),
-  component: ({ props }) => {
+  props: z.object({
+    options: z.array(z.object({ id: z.string().optional(), text: z.string(), hint: z.string().optional() })),
+  }),
+  component: function ChoicesView({ props }) {
     const { act, streaming } = useAct();
     return (
       <div className="zu-col" style={{ gap: 8 }}>
         {(props.options ?? []).filter(Boolean).map((o, i) => (
-          <button key={o.id ?? i} type="button" className="zu-choice" disabled={streaming} onClick={() => act(o.text)}>
+          <button
+            key={o.id ?? i}
+            type="button"
+            className="zu-choice"
+            disabled={streaming}
+            onClick={() => act(o.text)}
+          >
             <span className="zu-num">{String(i + 1).padStart(2, "0")}</span>
             <span>{o.text}</span>
           </button>
