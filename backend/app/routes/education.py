@@ -18,7 +18,8 @@ async def generate(body: EducationGenerateRequest):
     first = body.source_text.strip().splitlines()[0][:40] if body.source_text.strip() else ""
     req = GenerateWorldRequest(prompt=body.title or first, mode="education", source_text=body.source_text,
                                minor_mode=body.minor_mode, rating="all" if body.minor_mode else "teen",
-                               genre=f"文化·教育{('·' + body.subject) if body.subject else ''}")
+                               genre=f"文化·教育{('·' + body.subject) if body.subject else ''}",
+                               wait_details=body.wait_details)
     edu = {"title": body.title, "subject": body.subject, "grade": body.grade}
     return sse_response(generate_world_events(req, edu=edu))
 

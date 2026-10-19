@@ -144,3 +144,42 @@ def education_summary_messages(world: World, timeline: str) -> list[dict[str, st
                                           '"answer_index": 0, "explanation": "解析"}], "reflection": "一段思考引导(≤80字)"}'
                                           "；3-5个要点，3道选择题，严格基于知识卡，保证准确。"},
             {"role": "user", "content": f"主题：{world.title}\n知识卡：\n{cards}\n学习历程：\n{timeline}"}]
+
+
+# ---------------------------------------------------------------- 两步世界生成
+SKELETON_SCHEMA = """{"title":"≤10字","genre":"题材","tone":"基调≤12字","era":"时代≤15字","setting":"世界概述≤60字",
+"initial_conflict":"初始冲突≤50字","player":{"name":"玩家名","role":"身份"},
+"locations":[{"name":"地点名","description":"≤15字"}],
+"characters":[{"name":"姓名","role":"身份","location":"所在地点名","emoji":"一个emoji"}],
+"opening_options":["开场选项≤12字"]}"""
+
+
+def skeleton_messages(prompt: str, genre: str | None, tone: str | None, length: str, minor_mode: bool,
+                      source_text: str | None = None) -> list[dict[str, str]]:
+    """第一步：精简骨架（快速模型，几百 token 内，保证秒级预览）。"""
+    n_loc, n_char = {"short": (4, 3), "medium": (5, 4), "long": (6, 5)}[length]
+    sys = (SAFETY_LAYER + "\n你是“造化”世界架构师。快速勾勒一个可游玩的互动叙事世界骨架，只输出紧凑 JSON（不要换行缩进）：\n"
+           + SKELETON_SCHEMA + f"\n要求：{n_loc}个地点，{n_char}个NPC（不含玩家），3个开场选项，字段尽量短。")
+    if source_text:
+        sys += ('\n这是文化/教育模式：世界必须忠于原文与史实，NPC优先原文人物；额外输出 "knowledge_cards":'
+                '[{"title":"知识点","content":"准确解释≤60字","source":"原文引文"}]（4-6张）。')
+    if minor_mode:
+        sys += "\n未成年人模式：内容适合全年龄。"
+    user = f"主题：{prompt or '根据原文'}\n题材：{genre or '自动'}\n基调：{tone or '自动'}"
+    if source_text:
+        user += f"\n原文：\n{source_text[:3000]}"
+    return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
+
+
+def enrich_messages(skeleton: dict, prompt: str, minor_mode: bool, education: bool) -> list[dict[str, str]]:
+    """第二步：在骨架基础上补全细节；必须沿用骨架的 id 与名字（前端已展示预览）。"""
+    sys = (SAFETY_LAYER + "\n你是“造化”世界架构师。下面是已经展示给玩家的世界骨架（含 id），请在不改变标题、地点名、角色名与 id 的前提下补全细节，"
+           "严格输出 JSON，结构如下：\n" + WORLD_SCHEMA[:-1] +
+           (',\n "knowledge_cards": [{"id": "k_1", "title": "知识点", "content": "准确解释", "source": "出处"}]\n}' if education else "\n}") +
+           "\n要求：locations/characters 的 id 与骨架一致；为每个角色写性格(persona)、2个目标、与玩家(player)及其他角色的关系；"
+           "地点给出描述、坐标(0-100，分散)、相邻地点 connections 与 2-3 个可交互物；3-4 件物品；2-4 项属性 stats；"
+           "开场场景 150-250 字第二人称；3 个开场选项。" + ("\n教育模式：忠于原文史实，知识卡 5-8 张。" if education else ""))
+    if minor_mode:
+        sys += "\n未成年人模式：内容适合全年龄。"
+    return [{"role": "system", "content": sys},
+            {"role": "user", "content": f"主题：{prompt}\n骨架：{json.dumps(skeleton, ensure_ascii=False)}"}]

@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 
 from app.agents.world_builder import generate_world_events
-from app.graph.turn_graph import spawn_opening_media, world_lock
+from app.graph.turn_graph import spawn_opening_media
 from app.routes.deps import world_or_404
 from app.schemas import GenerateWorldRequest, SettingsPatch, World, WorldSummary
 from app.services import repo
@@ -42,11 +42,8 @@ async def regenerate(world_id: str, overrides: dict[str, Any] | None = Body(defa
     req = GenerateWorldRequest(**base)
     edu = w.state.flags.get("edu")
 
-    async def gen():
-        async with world_lock(world_id):
-            async for ev in generate_world_events(req, world_id=world_id, edu=edu):
-                yield ev
-    return sse_response(gen())
+    # 写库阶段在 generate_world_events 内部持有 world_lock（避免与回合/后台补全冲突，且不死锁）
+    return sse_response(generate_world_events(req, world_id=world_id, edu=edu))
 
 
 @router.post("/worlds/{world_id}/confirm", response_model=World)

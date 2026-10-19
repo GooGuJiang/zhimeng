@@ -105,6 +105,8 @@ class World(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     source: Literal["llm", "fallback"] = "fallback"
+    # 两步生成：enriching=骨架已可玩、后台补全细节中；complete=细节完整；local=补全失败，已按本地规则补齐（仍可玩）
+    detail_status: Literal["enriching", "complete", "local"] = "complete"
     ai_generated: bool = True
     ai_label: str = AI_LABEL
 
@@ -140,6 +142,7 @@ class GenerateWorldRequest(BaseModel):
     source_text: str | None = Field(None, max_length=20000)
     minor_mode: bool = False
     rating: Rating = "teen"
+    wait_details: bool = False  # true：SSE 保持打开，补全完成后再推送一次完整 world 再 done
 
 
 class EducationGenerateRequest(BaseModel):
@@ -148,6 +151,7 @@ class EducationGenerateRequest(BaseModel):
     subject: str | None = None
     grade: str | None = None
     minor_mode: bool = True
+    wait_details: bool = False
 
 
 class SettingsPatch(BaseModel):
