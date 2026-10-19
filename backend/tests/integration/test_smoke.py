@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from conftest import DEMO_PROMPT, LIVE, all_of, first
+from conftest import DEMO_PROMPT, LIVE, REAL, all_of, first
 
 AI_LABEL = "内容由AI生成"
 
@@ -37,7 +37,7 @@ def test_ac1_generate_world_preview(api):
     assert len([c for c in w["characters"] if not c.get("is_player")]) >= 2, "NPCs"
     assert w["initial_conflict"].strip()
     assert w["ai_generated"] is True and w["ai_label"] == AI_LABEL
-    if not LIVE:
+    if not LIVE and not REAL:
         assert elapsed < 5, f"fallback world generation took {elapsed:.1f}s (AC-1: 5s)"
     # persisted + regenerate keeps id
     assert api.get(f"/api/worlds/{w['id']}").status_code == 200

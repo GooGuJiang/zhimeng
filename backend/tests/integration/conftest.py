@@ -18,7 +18,15 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 LIVE = os.getenv("ZM_API_BASE")
+# ZM_QA_REAL=1：进程内但走真实模型（需环境/.env 中的 DASHSCOPE_API_KEY；测试从不打印密钥）
+REAL = os.getenv("ZM_QA_REAL", "0").lower() in {"1", "true", "yes"}
 DEMO_PROMPT = "一个民国上海滩的侦探故事，我是报社记者"
+
+# 进程内模式：在任何 app.* 导入之前固定兜底模式与临时数据目录，保证可复现
+if not LIVE:
+    os.environ["ZM_FORCE_FALLBACK"] = "0" if REAL else "1"
+    os.environ.setdefault("ZM_DATA_DIR", tempfile.mkdtemp(prefix="zm-qa-"))
+    os.environ["STREAM_DELAY"] = "0"
 
 
 def parse_sse(text: str) -> list[tuple[str, object]]:
@@ -82,10 +90,10 @@ def api():
         with httpx.Client(base_url=LIVE.rstrip("/"), timeout=180.0) as c:
             yield Api(c)
         return
-    tmp = tempfile.mkdtemp(prefix="zm-qa-")
-    os.environ["ZM_FORCE_FALLBACK"] = "1"
-    os.environ["ZM_DATA_DIR"] = tmp
-    os.environ["STREAM_DELAY"] = "0"
+    try:
+        from app.main import app  # noqa: F401
+    except ModuleNotFoundError as e:  # 后端入口尚未就绪 → 明确失败原因（见 BUGS.md）
+        pytest.fail(f"backend entrypoint app.main:app not importable: {e}", pytrace=False)
     from fastapi.testclient import TestClient
 
     from app.main import app

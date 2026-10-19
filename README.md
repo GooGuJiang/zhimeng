@@ -119,17 +119,19 @@ cp .env.example .env          # 填写 DASHSCOPE_API_KEY（可留空）
 scripts/dev.sh                # 后端 http://localhost:8000 + 前端 http://localhost:3000
 scripts/dev.sh --fallback     # 强制本地兜底模式（离线演示 / 无 Key）
 scripts/dev.sh --prod         # 前端使用 next build && next start
+scripts/dev.sh --api-only     # 只启动后端（--web-only 只启动前端）
 ```
 
 `dev.sh` 会：自动从 `.env.example` 生成 `.env`；优先使用当前 shell 中已导出的 `DASHSCOPE_API_KEY`（不会打印密钥）；
-首次运行时创建 `backend/.venv` 并安装依赖、执行 `pnpm install`；同时启动前后端并等待健康检查；Ctrl+C 一并停止。
+首次运行时创建 `backend/.venv` 并安装依赖（`backend/pyproject.toml` 或 `requirements.txt`）、执行 `pnpm install`；
+启动前检查后端入口 `backend/app/main.py` 与 `pnpm`/`curl` 是否就绪；同时启动前后端并等待健康检查（超时会给出提示）；Ctrl+C 一并停止。
 
 ### 分别启动
 
 ```bash
 # 后端
 cd backend
-uv venv .venv --python 3.12 && uv pip install --python .venv/bin/python -r requirements.txt
+uv venv .venv --python 3.12 && uv pip install --python .venv/bin/python -e .   # 或 -r requirements.txt
 .venv/bin/uvicorn app.main:app --reload --port 8000
 
 # 前端（/api 与 /static 由 Next 代理到 BACKEND_ORIGIN）
@@ -150,7 +152,7 @@ pnpm dev            # http://localhost:3000
 | `ZM_DATA_DIR` | `backend/data` | SQLite、ChromaDB、生成资产所在目录 |
 | `CHAT_MODEL` / `FAST_MODEL` | `qwen-plus` / `qwen-turbo` | 叙事模型 / 快速决策与审核模型 |
 | `EMBEDDING_MODEL` | `text-embedding-v3` | 记忆向量模型 |
-| `IMAGE_MODEL` / `TTS_MODEL` | `wanx2.1-t2i-turbo` / `qwen-tts` | 插画 / 配音模型 |
+| `IMAGE_MODEL` / `TTS_MODEL` | `wanx2.1-t2i-turbo` / `qwen-tts` | 插画 / 配音模型（实测部分账号 `qwen-tts` 返回 “Model not exist”，可设 `TTS_MODEL=qwen3-tts-flash`，见 BUGS.md BUG-002） |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
 | `NEXT_PUBLIC_API_BASE` | 空 | 可选：让浏览器直连后端（默认同源代理） |
@@ -159,13 +161,15 @@ pnpm dev            # http://localhost:3000
 
 ```bash
 scripts/qa.sh            # API 冒烟 + E2E，结果写入 docs/qa-report.md
-scripts/qa.sh api        # 只跑 API 冒烟（进程内、兜底模式、临时数据目录，无需启动服务）
+scripts/qa.sh api        # 只跑 API 冒烟 + 包级契约测试（进程内、兜底模式、临时数据目录，无需启动服务）
+scripts/qa.sh api-real   # 同上但走真实模型（DASHSCOPE_API_KEY 取自环境或 .env；输出中的密钥自动打码）
+scripts/qa.sh e2e        # 只跑 E2E（需应用已运行）
 
 # E2E（需先 scripts/dev.sh 启动应用；使用系统 Chrome）
 cd tests/e2e && pnpm install
 pnpm test                         # AC-1 ~ AC-9
 ZM_MODE=real pnpm test            # 真实模型模式（放宽超时）
-pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/
+pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/（ZM_MODE=real pnpm demo 用真实模型）
 
 # API 冒烟打到运行中的服务（例如真实模型模式）
 ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tests/integration -q
@@ -189,13 +193,15 @@ ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tes
 
 | 步骤 | 截图 |
 |---|---|
-| 开局 | `docs/screens/01-home.png` · `docs/screens/02-preview.png` |
-| 游玩 | `docs/screens/03-play.png` · `docs/screens/04-offscreen.png` |
-| 记忆 | `docs/screens/05-memory.png` |
-| 上帝视角 | `docs/screens/06-god.png` |
-| 教育模式 | `docs/screens/07-education.png` · `docs/screens/08-edu-summary.png` |
-| 安全 | `docs/screens/09-safety.png` |
-| 分享 | `docs/screens/10-poster.png` |
+| 开局 | `01-home.png` · `02-generating.png` · `03-world-preview.png` · `04-opening.png` |
+| 游玩三轮 | `05-play-3-turns.png` |
+| 记忆 | `06-memory-recall.png` |
+| 上帝视角 | `07-god-view.png` · `08-god-inject.png` |
+| 安全 | `09-safety-block.png` |
+| 分享 | `10-poster.png` |
+| 教育模式 | `11-education-input.png` · `12-education-play.png` · `13-education-summary.png` |
+
+（均位于 `docs/screens/`，由 `pnpm demo` 生成；应用尚未可运行时该目录为空，见 BUGS.md。）
 
 ## 团队分工
 
