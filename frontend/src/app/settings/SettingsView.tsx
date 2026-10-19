@@ -18,6 +18,7 @@ const RATINGS: { v: Rating; l: string; d: string }[] = [
 
 type Health = Awaited<ReturnType<typeof api.health>>;
 type Policy = Awaited<ReturnType<typeof api.policy>>;
+type ReportRow = Awaited<ReturnType<typeof api.reports>>[number];
 
 export function SettingsView() {
   const toast = useToast();
@@ -27,9 +28,7 @@ export function SettingsView() {
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
   const [policy, setPolicy] = useState<Policy | null>(null);
-  const [reports, setReports] = useState<
-    { id: string; reason?: string; status?: string; created_at?: string }[]
-  >([]);
+  const [reports, setReports] = useState<ReportRow[] | null>(null);
   const [reporting, setReporting] = useState(false);
 
   useEffect(() => {
@@ -41,11 +40,19 @@ export function SettingsView() {
       .policy()
       .then(setPolicy)
       .catch(() => {});
-    fetch("/api/reports")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((r) => setReports(Array.isArray(r) ? r : []))
-      .catch(() => {});
-  }, [reporting]);
+  }, []);
+  // v1.2: reports are scoped per world (the full list needs an admin token the browser never holds).
+  useEffect(() => {
+    if (!worldId || reporting) return;
+    let live = true;
+    api
+      .reports(worldId)
+      .then((r) => live && setReports(Array.isArray(r) ? r : []))
+      .catch(() => live && setReports(null)); // 403 / offline: just hide the count
+    return () => {
+      live = false;
+    };
+  }, [worldId, reporting]);
   useEffect(() => {
     if (worldId)
       api
@@ -196,9 +203,11 @@ export function SettingsView() {
               >
                 <Flag size={14} aria-hidden /> 举报 / 反馈
               </button>
-              <span className="faint" style={{ fontSize: 12 }}>
-                已提交 {reports.length} 条
-              </span>
+              {worldId && reports ? (
+                <span className="faint" style={{ fontSize: 12 }} data-testid="report-count">
+                  当前世界已提交 {reports.length} 条
+                </span>
+              ) : null}
             </div>
           </section>
           <section className="card flat">
@@ -218,7 +227,7 @@ export function SettingsView() {
                 </div>
                 {Object.entries(health.models ?? {}).map(([k, v]) => (
                   <div key={k} className="faint">
-                    {k}：{v}
+                    {k}：{Array.isArray(v) ? v.join(" → ") : String(v)}
                   </div>
                 ))}
                 <div className="faint">版本 {health.version}</div>
