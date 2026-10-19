@@ -2,7 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Upload } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import { setCurrentWorld } from "@/hooks/useCurrentWorld";
 import { worldCache } from "@/lib/cache";
 import { useToast } from "./Toast";
@@ -24,7 +24,7 @@ export function ImportSave({ label = "导入存档" }: { label?: string }) {
       toast(`已导入《${w.title}》`);
       router.push(`/play/${w.id}`);
     } catch (e) {
-      toast(`导入失败：${(e as Error).message}`);
+      toast(`导入失败：${errorText(e)}`);
     } finally {
       setBusy(false);
     }

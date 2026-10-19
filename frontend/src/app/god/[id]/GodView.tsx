@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { FastForward, Zap, ArrowLeft } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import type { MemoryEntry, NpcView, World, WorldEvent } from "@/lib/types";
 import { setCurrentWorld } from "@/hooks/useCurrentWorld";
 import { kindLabel } from "@/openui/library";
@@ -39,7 +39,7 @@ export function GodView({ id }: { id: string }) {
       api.memory(id, "injected", 20),
     ]);
     if (w.status === "fulfilled") setWorld(w.value);
-    else setErr((w.reason as Error).message);
+    else setErr(errorText(w.reason));
     if (n.status === "fulfilled") setNpcs(n.value);
     else setNpcs([]);
     if (e.status === "fulfilled") setEvents(e.value);
@@ -67,7 +67,7 @@ export function GodView({ id }: { id: string }) {
       setContent("");
       await load();
     } catch (e) {
-      toast(`插入失败：${(e as Error).message}`);
+      toast(`插入失败：${errorText(e)}`);
     } finally {
       setBusy(null);
     }
@@ -79,7 +79,7 @@ export function GodView({ id }: { id: string }) {
       toast(`世界运转了一轮，发生 ${r.events.length} 件事`);
       await load();
     } catch (e) {
-      toast(`推进失败：${(e as Error).message}`);
+      toast(`推进失败：${errorText(e)}`);
     } finally {
       setBusy(null);
     }

@@ -8,7 +8,7 @@
  * - Generative UI comes from `ui` events / GET /ui; if absent it is derived locally from world state.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, streamPath } from "@/lib/api";
+import { api, streamPath, errorText } from "@/lib/api";
 import { streamSSE } from "@/lib/sse";
 import { store, uid } from "@/lib/storage";
 import type {
@@ -120,7 +120,7 @@ export function usePlay(worldId: string) {
           });
         }
       } catch (e) {
-        if (live) setLoadError((e as Error).message);
+        if (live) setLoadError(errorText(e));
       } finally {
         if (live) setLoaded(true);
       }
@@ -299,7 +299,7 @@ export function usePlay(worldId: string) {
         if (!gotDone && !ctrl.signal.aborted)
           setError((e) => e ?? { message: "连接意外中断，本回合未提交，进度安全。", retryable: true });
       } catch (e) {
-        if (!ctrl.signal.aborted) setError({ message: (e as Error).message || "网络异常", retryable: true });
+        if (!ctrl.signal.aborted) setError({ message: errorText(e), retryable: true });
       } finally {
         setStreaming(false);
       }

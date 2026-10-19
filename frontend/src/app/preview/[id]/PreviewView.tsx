@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { RefreshCw, DoorOpen } from "lucide-react";
-import { api, streamPath } from "@/lib/api";
+import { api, streamPath, errorText } from "@/lib/api";
 import type { World } from "@/lib/types";
 import { worldCache } from "@/lib/cache";
 import { setCurrentWorld } from "@/hooks/useCurrentWorld";
@@ -32,7 +32,7 @@ export function PreviewView({ id }: { id: string }) {
         worldCache.set(w);
         setWorld(w);
       })
-      .catch((e) => live && setErr((e as Error).message));
+      .catch((e) => live && setErr(errorText(e)));
     return () => {
       live = false;
     };
@@ -65,7 +65,7 @@ export function PreviewView({ id }: { id: string }) {
       router.push(`/play/${id}`);
     } catch (e) {
       setEntering(false);
-      toast(`进入失败：${(e as Error).message}`);
+      toast(`进入失败：${errorText(e)}`);
     }
   };
 

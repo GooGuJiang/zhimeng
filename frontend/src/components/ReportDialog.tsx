@@ -1,7 +1,7 @@
 "use client";
 /** F9 举报入口: POST /api/reports. */
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import { Dialog } from "./Dialog";
 import { useToast } from "./Toast";
 
@@ -34,7 +34,7 @@ export function ReportDialog({
       toast(r.priority === "high" ? "举报已收到，已标记为优先处理" : "举报已收到，感谢你的反馈");
       onClose();
     } catch (e) {
-      toast(`举报提交失败：${(e as Error).message}`);
+      toast(`举报提交失败：${errorText(e)}`);
       setBusy(false);
     }
   };

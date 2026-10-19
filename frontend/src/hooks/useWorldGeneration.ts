@@ -1,4 +1,5 @@
 "use client";
+import { errorText } from "@/lib/api";
 /**
  * F1 / F10: drives a world-generation SSE stream (generate, education, regenerate) and exposes
  * progress, the draft text the LLM is writing, safety blocks and the resulting world.
@@ -75,8 +76,7 @@ export function useWorldGeneration() {
           ctrl.signal,
         );
       } catch (e) {
-        if (!ctrl.signal.aborted)
-          setState((s) => ({ ...s, error: (e as Error).message || "网络异常，请重试" }));
+        if (!ctrl.signal.aborted) setState((s) => ({ ...s, error: errorText(e) }));
       } finally {
         setState((s) => ({ ...s, running: false }));
       }

@@ -1,7 +1,7 @@
 "use client";
 /** F4 memory Q&A with citations (第几章·第几回合). */
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import type { Citation } from "@/lib/types";
 import { AiLabel } from "./AiLabel";
 
@@ -24,7 +24,7 @@ export function MemoryQuery({
     try {
       setRes(await api.queryMemory(worldId, question.trim(), 5));
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -57,7 +57,19 @@ export function MemoryQuery({
           {busy ? "追忆中…" : "回忆"}
         </button>
       </form>
-      {err ? <div className="notice warn">{err}</div> : null}
+      {err ? (
+        <div className="notice warn row" role="alert" data-testid="memory-error">
+          <span style={{ flex: 1 }}>{err}</span>
+          <button type="button" className="btn sm ghost" onClick={() => void ask()}>
+            重试
+          </button>
+        </div>
+      ) : null}
+      {busy ? (
+        <p className="faint" data-testid="memory-loading" style={{ margin: 0, fontSize: 13 }}>
+          正在检索世界记忆并组织回答…（真实模型可能需要十几秒）
+        </p>
+      ) : null}
       {res ? (
         <div className="stack memory-result" data-testid="memory-answer">
           <div className="row">

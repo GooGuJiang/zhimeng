@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Film } from "lucide-react";
 import { toPng } from "html-to-image";
-import { api, assetUrl } from "@/lib/api";
+import { api, assetUrl, errorText } from "@/lib/api";
 import type { Asset, Poster, World } from "@/lib/types";
 import { canRecordVideo, downloadBlob, recordEndingVideo } from "@/lib/video";
 import { Dialog } from "./Dialog";
@@ -59,7 +59,7 @@ export function PosterDialog({
       a.download = `织梦-${world.title}-海报.png`;
       a.click();
     } catch (e) {
-      toast(`海报导出失败：${(e as Error).message}`);
+      toast(`海报导出失败：${errorText(e)}`);
     }
   };
   const saveVideo = async () => {
@@ -70,7 +70,7 @@ export function PosterDialog({
       const blob = await recordEndingVideo(poster, poster.image_url ? assetUrl(poster.image_url) : null);
       downloadBlob(blob, `织梦-${world.title}-结局.webm`);
     } catch (e) {
-      toast(`短视频生成失败：${(e as Error).message}`);
+      toast(`短视频生成失败：${errorText(e)}`);
     } finally {
       setRecording(false);
     }

@@ -2,7 +2,7 @@
 /** 设置与安全 (F9): minor mode, rating, motion / font prefs, safety policy, reports, service status. */
 import { useEffect, useState } from "react";
 import { Flag, ShieldCheck } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import type { Rating, World } from "@/lib/types";
 import { usePrefs } from "@/hooks/usePrefs";
 import { useCurrentWorld } from "@/hooks/useCurrentWorld";
@@ -60,7 +60,7 @@ export function SettingsView() {
       setWorld(await api.patchSettings(world.id, body));
       toast("当前世界的安全设置已更新");
     } catch (e) {
-      toast(`更新失败：${(e as Error).message}`);
+      toast(`更新失败：${errorText(e)}`);
     }
   };
 

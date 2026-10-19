@@ -14,7 +14,7 @@ import {
   Share2,
   Volume2,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import type { Asset, Turn } from "@/lib/types";
 import { usePlay, TURN_STAGES } from "@/hooks/usePlay";
 import { usePrefs } from "@/hooks/usePrefs";
@@ -87,7 +87,7 @@ export function PlayView({ id }: { id: string }) {
           toast(`天意已降：${content}`);
           void p.refreshSide();
         })
-        .catch((e) => toast(`干预失败：${(e as Error).message}`));
+        .catch((e) => toast(`干预失败：${errorText(e)}`));
     },
   };
 
@@ -130,7 +130,7 @@ export function PlayView({ id }: { id: string }) {
       );
       toast("存档已导出");
     } catch (e) {
-      toast(`导出失败：${(e as Error).message}`);
+      toast(`导出失败：${errorText(e)}`);
     }
   };
 
@@ -139,14 +139,14 @@ export function PlayView({ id }: { id: string }) {
       const a = await api.tts(id, { text: t.narration.slice(0, 600), turn_id: t.id });
       replaceAsset(a);
     } catch (e) {
-      toast(`配音失败：${(e as Error).message}`);
+      toast(`配音失败：${errorText(e)}`);
     }
   };
   const illustrate = async (t: Turn) => {
     try {
       replaceAsset(await api.illustrate(id, { turn_id: t.id }));
     } catch (e) {
-      toast(`插画生成失败：${(e as Error).message}`);
+      toast(`插画生成失败：${errorText(e)}`);
     }
   };
 

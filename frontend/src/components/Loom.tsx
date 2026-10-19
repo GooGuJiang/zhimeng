@@ -20,6 +20,10 @@ export const STAGE_LABELS: Record<string, string> = {
   extract: "提炼事实",
   ui: "编织界面",
   asset: "绘图配音",
+  recall: "回顾旅程",
+  points: "提炼要点",
+  quiz: "出题",
+  reflect: "反思",
 };
 
 export function Loom({

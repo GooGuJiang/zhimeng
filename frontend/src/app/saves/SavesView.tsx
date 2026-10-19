@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Download, Trash2 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import type { WorldSummary } from "@/lib/types";
 import { useCurrentWorld } from "@/hooks/useCurrentWorld";
 import { ImportSave } from "@/components/ImportSave";
@@ -30,7 +30,7 @@ export function SavesView() {
         `织梦存档-${w.title}.json`,
       );
     } catch (e) {
-      toast(`导出失败：${(e as Error).message}`);
+      toast(`导出失败：${errorText(e)}`);
     }
   };
   const remove = async (w: WorldSummary) => {
@@ -41,7 +41,7 @@ export function SavesView() {
       toast("已删除");
       void load();
     } catch (e) {
-      toast(`删除失败：${(e as Error).message}`);
+      toast(`删除失败：${errorText(e)}`);
     }
   };
   return (
