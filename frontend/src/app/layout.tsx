@@ -3,9 +3,10 @@ import type { ReactNode } from "react";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
+import { SHOW_AI_LABEL } from "@/components/AiLabel";
 
 export const metadata: Metadata = {
-  title: "织梦 · AI 原生互动叙事引擎",
+  title: SHOW_AI_LABEL ? "织梦 · AI 原生互动叙事引擎" : "织梦 · 互动叙事引擎",
   description: "一句话，生成一个可玩、有记忆、会自己运转的世界。",
 };
 

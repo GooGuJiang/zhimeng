@@ -9,6 +9,7 @@ import { worldCache } from "@/lib/cache";
 import { GenerationProgress } from "@/components/GenerationProgress";
 import { SafetyNotice } from "@/components/SafetyNotice";
 import { usePrefs } from "@/hooks/usePrefs";
+import { SHOW_AI_LABEL } from "@/components/AiLabel";
 
 const SUBJECTS = ["语文", "历史", "地理", "非遗", "科学", "思政"];
 const GRADES = ["小学", "初中", "高中", "大学"];
@@ -173,8 +174,10 @@ export function EducationView() {
         </div>
       </section>
       <p className="faint center">
-        <BookOpen size={14} aria-hidden style={{ verticalAlign: -2 }} /> 内容由 AI
-        依据原文生成，可能存在偏差，请以教材与权威史料为准。
+        <BookOpen size={14} aria-hidden style={{ verticalAlign: -2 }} />{" "}
+        {SHOW_AI_LABEL
+          ? "内容由 AI 依据原文生成，可能存在偏差，请以教材与权威史料为准。"
+          : "内容依据原文改编，可能存在偏差，请以教材与权威史料为准。"}
       </p>
     </div>
   );

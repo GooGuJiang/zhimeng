@@ -13,6 +13,7 @@ import { worldCache } from "@/lib/cache";
 import { GenerationProgress } from "@/components/GenerationProgress";
 import { SafetyNotice } from "@/components/SafetyNotice";
 import { ImportSave } from "@/components/ImportSave";
+import { SHOW_AI_LABEL } from "@/components/AiLabel";
 
 const SEEDS = [
   "一个民国上海滩的侦探故事，我是报社记者",
@@ -83,7 +84,7 @@ export function HomeView() {
     <div className="home">
       <section className="hero">
         <div className="hero-copy">
-          <div className="eyebrow">AI 原生互动叙事引擎</div>
+          <div className="eyebrow">{SHOW_AI_LABEL ? "AI 原生互动叙事引擎" : "互动叙事引擎"}</div>
           <h1 className="h-display">
             一句话，
             <br />
@@ -236,7 +237,7 @@ export function HomeView() {
             />
           ) : null}
           <p className="faint" style={{ fontSize: 12, margin: "12px 0 0" }}>
-            生成内容由 AI 创作并经双向安全审核；未成年人模式下仅生成全年龄内容。
+            {SHOW_AI_LABEL ? "生成内容由 AI 创作并经双向安全审核；" : ""}未成年人模式下仅生成全年龄内容。
           </p>
         </div>
       </section>

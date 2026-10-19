@@ -8,6 +8,7 @@ import type { EducationSummary } from "@/lib/types";
 import { Dialog } from "./Dialog";
 import { AiLabel } from "./AiLabel";
 import { KnowledgeCards } from "./WorldBits";
+import { SHOW_AI_LABEL } from "./AiLabel";
 
 export function EduSummaryView({ s }: { s: EducationSummary }) {
   const [picked, setPicked] = useState<Record<number, number>>({});
@@ -168,7 +169,11 @@ export function EduSummaryDialog({ worldId, onClose }: { worldId: string; onClos
             >
               {polls === "gave-up" ? (
                 <>
-                  <span style={{ flex: 1 }}>当前为本地整理版，AI 精修版暂未就绪。</span>
+                  <span style={{ flex: 1 }}>
+                    {SHOW_AI_LABEL
+                      ? "当前为本地整理版，AI 精修版暂未就绪。"
+                      : "当前为本地整理版，精修版暂未就绪。"}
+                  </span>
                   <button type="button" className="btn sm ghost" onClick={retry}>
                     再试一次
                   </button>
@@ -180,7 +185,11 @@ export function EduSummaryDialog({ worldId, onClose }: { worldId: string; onClos
                     <i />
                     <i />
                   </span>
-                  <span>先为你呈现本地整理版，AI 精修版生成中，完成后自动替换…</span>
+                  <span>
+                    {SHOW_AI_LABEL
+                      ? "先为你呈现本地整理版，AI 精修版生成中，完成后自动替换…"
+                      : "先为你呈现本地整理版，精修版生成中，完成后自动替换…"}
+                  </span>
                 </>
               )}
             </div>
@@ -209,7 +218,9 @@ export function EduSummaryDialog({ worldId, onClose }: { worldId: string; onClos
           />
           <p className="faint" style={{ margin: 0, fontSize: 13 }}>
             {elapsed < 8
-              ? "AI 正在回顾你的探索并出题…"
+              ? SHOW_AI_LABEL
+                ? "AI 正在回顾你的探索并出题…"
+                : "正在回顾你的探索并出题…"
               : `已等待 ${elapsed} 秒，真实模型生成小结通常需要 10–40 秒，请稍候。`}
           </p>
         </div>

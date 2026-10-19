@@ -2,6 +2,7 @@
  * Thin client for the FastAPI backend. All calls are same-origin (/api) and proxied by Next,
  * unless NEXT_PUBLIC_API_BASE points the browser at the backend directly. No keys live here.
  */
+import { SHOW_AI_LABEL } from "@/components/AiLabel";
 import type {
   Asset,
   Citation,
@@ -47,8 +48,14 @@ export function friendlyMessage(status: number, detail?: string): string {
   if (status === 404) return "找不到对应的内容，它可能已被删除";
   if (status === 409) return "操作冲突，请刷新后重试";
   if (status === 429) return "请求太频繁了，请稍等片刻再试";
-  if (status === 504 || status === 408) return "AI 思考得太久，暂时没有回应，请稍后重试";
-  if (status >= 500) return "服务暂时繁忙（AI 可能仍在生成），请稍后重试";
+  if (status === 504 || status === 408)
+    return SHOW_AI_LABEL
+      ? "AI 思考得太久，暂时没有回应，请稍后重试"
+      : "生成时间过长，暂时没有回应，请稍后重试";
+  if (status >= 500)
+    return SHOW_AI_LABEL
+      ? "服务暂时繁忙（AI 可能仍在生成），请稍后重试"
+      : "服务暂时繁忙（内容可能仍在生成），请稍后重试";
   return `请求失败（${status}），请重试`;
 }
 
@@ -56,7 +63,10 @@ export function friendlyMessage(status: number, detail?: string): string {
 export function errorText(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   const name = (e as { name?: string })?.name;
-  if (name === "TimeoutError") return "等待时间过长，AI 仍未完成，请稍后重试";
+  if (name === "TimeoutError")
+    return SHOW_AI_LABEL
+      ? "等待时间过长，AI 仍未完成，请稍后重试"
+      : "等待时间过长，内容仍未生成完成，请稍后重试";
   if (name === "AbortError") return "请求已取消";
   if (name === "TypeError") return "网络连接异常，请检查后端服务后重试"; // fetch network failure
   const msg = (e as Error)?.message ?? "";
