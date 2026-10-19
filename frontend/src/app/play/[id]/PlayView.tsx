@@ -30,6 +30,7 @@ import { PosterDialog } from "@/components/PosterDialog";
 import { EduSummaryDialog } from "@/components/EduSummaryDialog";
 import { SafetyNotice } from "@/components/SafetyNotice";
 import { AudioBar, Illustration } from "@/components/MediaBits";
+import { mergeAssets } from "@/lib/assets";
 import { useToast } from "@/components/Toast";
 
 type ReportTarget = { turnId?: string; content: string };
@@ -38,6 +39,7 @@ export function PlayView({ id }: { id: string }) {
   const p = usePlay(id);
   const toast = useToast();
   const [prefs] = usePrefs();
+  const [mediaBusy, setMediaBusy] = useState<Record<string, boolean>>({});
   const [input, setInput] = useState("");
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryQ, setMemoryQ] = useState<string | null>(null);
@@ -98,11 +100,23 @@ export function PlayView({ id }: { id: string }) {
   const turnIds = new Set(p.turns.map((t) => t.id));
   const assetsFor = (turnId: string | null, isLatest: boolean): Asset[] =>
     p.assets.filter((a) => a.turn_id === turnId || (isLatest && a.turn_id && !turnIds.has(a.turn_id)));
+  // a manual illustrate/tts/regenerate result replaces that slot (same id → version-aware merge;
+  // a pending placeholder is then long-polled by usePlay until it upgrades).
   const replaceAsset = (a: Asset) =>
-    p.setAssets((old) => [
-      ...old.filter((x) => x.id !== a.id && !(x.type === a.type && x.turn_id === a.turn_id)),
-      a,
-    ]);
+    p.setAssets((old) =>
+      mergeAssets(
+        old.filter((x) => x.id === a.id || !(x.type === a.type && x.turn_id === a.turn_id)),
+        [a],
+      ),
+    );
+  const withBusy = async (key: string, fn: () => Promise<void>) => {
+    setMediaBusy((m) => ({ ...m, [key]: true }));
+    try {
+      await fn();
+    } finally {
+      setMediaBusy((m) => ({ ...m, [key]: false }));
+    }
+  };
 
   const hasOpeningTurn = p.turns.some((t) => t.index === 0);
   const lastTurn = p.turns[p.turns.length - 1];
@@ -136,21 +150,22 @@ export function PlayView({ id }: { id: string }) {
     }
   };
 
-  const speak = async (t: Turn) => {
-    try {
-      const a = await api.tts(id, { text: t.narration.slice(0, 600), turn_id: t.id });
-      replaceAsset(a);
-    } catch (e) {
-      toast(`配音失败：${errorText(e)}`);
-    }
-  };
-  const illustrate = async (t: Turn) => {
-    try {
-      replaceAsset(await api.illustrate(id, { turn_id: t.id }));
-    } catch (e) {
-      toast(`插画生成失败：${errorText(e)}`);
-    }
-  };
+  const speak = (t: Turn) =>
+    withBusy(`${t.id}:audio`, async () => {
+      try {
+        replaceAsset(await api.tts(id, { text: t.narration.slice(0, 600), turn_id: t.id }));
+      } catch (e) {
+        toast(`配音失败：${errorText(e)}`);
+      }
+    });
+  const illustrate = (t: Turn) =>
+    withBusy(`${t.id}:image`, async () => {
+      try {
+        replaceAsset(await api.illustrate(id, { turn_id: t.id }));
+      } catch (e) {
+        toast(`插画生成失败：${errorText(e)}`);
+      }
+    });
 
   const renderTurn = (t: Turn, i: number) => {
     const prev = i > 0 ? p.turns[i - 1] : null;
@@ -183,16 +198,23 @@ export function PlayView({ id }: { id: string }) {
             </span>
             {t.key_scene ? <span className="tag rose">关键场景</span> : null}
             <span className="spacer" />
-            <button type="button" className="linkish" onClick={() => void speak(t)} title="为这段生成配音">
-              <Volume2 size={12} aria-hidden /> 朗读
+            <button
+              type="button"
+              className="linkish"
+              onClick={() => void speak(t)}
+              disabled={mediaBusy[`${t.id}:audio`]}
+              title="为这段生成配音"
+            >
+              <Volume2 size={12} aria-hidden /> {mediaBusy[`${t.id}:audio`] ? "配音请求中…" : "朗读"}
             </button>
             <button
               type="button"
               className="linkish"
               onClick={() => void illustrate(t)}
+              disabled={mediaBusy[`${t.id}:image`]}
               title="为这段生成插画"
             >
-              <ImageIcon size={12} aria-hidden /> 配图
+              <ImageIcon size={12} aria-hidden /> {mediaBusy[`${t.id}:image`] ? "构图中…" : "配图"}
             </button>
             {isLatest && t.index > 0 ? (
               <button

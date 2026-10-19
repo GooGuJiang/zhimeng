@@ -26,6 +26,7 @@ import type {
 } from "@/lib/types";
 import { fallbackComponents } from "@/openui/fallback";
 import { worldCache } from "@/lib/cache";
+import { isPending, mergeAssets, watchAsset } from "@/lib/assets";
 import { useReducedMotion } from "./usePrefs";
 
 export const TURN_STAGES = ["safety", "memory", "world", "npc", "director", "narrate", "extract", "persist"];
@@ -41,6 +42,8 @@ export interface LiveTurn {
   rewrite: boolean;
   /** v1.2: narration was reset and is being re-told by the local template. */
   fallback?: boolean;
+  /** v1.3: input flagged mid-stream; the partial narration was discarded. */
+  blocked?: boolean;
 }
 
 const mergeById = <T extends { id: string }>(base: T[], add: T[]) => {
@@ -76,13 +79,33 @@ export function usePlay(worldId: string) {
     setPendingState(p);
   };
 
+  const syncTurns = useCallback((server: Turn[]) => {
+    const byId = new Map(server.map((t) => [t.id, t]));
+    setTurns((old) => {
+      let changed = false;
+      const next = old.map((t) => {
+        const st = byId.get(t.id);
+        if (st && (st.narration !== t.narration || st.ai_label !== t.ai_label)) {
+          changed = true;
+          return { ...t, ...st };
+        }
+        return t;
+      });
+      return changed ? next : old;
+    });
+  }, []);
+
   const refreshSide = useCallback(async () => {
-    const [w, ev, ui, as] = await Promise.allSettled([
+    const [w, ev, ui, as, ts] = await Promise.allSettled([
       api.getWorld(worldId),
       api.events(worldId, "offscreen", 30),
       api.ui(worldId),
       api.assets(worldId),
+      api.turns(worldId, 200),
     ]);
+    // v1.3: committed narration may be replaced by post-commit review — the server copy wins for every
+    // turn we already show (new turns are committed by the typewriter, so they're not added here).
+    if (ts.status === "fulfilled") syncTurns(ts.value);
     if (w.status === "fulfilled") {
       worldCache.set(w.value);
       setWorld(w.value);
@@ -94,8 +117,8 @@ export function usePlay(worldId: string) {
     }
     if (ev.status === "fulfilled") setEvents((old) => mergeById(old, ev.value));
     if (ui.status === "fulfilled" && ui.value.components?.length) setServerUi(ui.value.components);
-    if (as.status === "fulfilled") setAssets((old) => mergeById(old, as.value));
-  }, [worldId]);
+    if (as.status === "fulfilled") setAssets((old) => mergeAssets(old, as.value));
+  }, [worldId, syncTurns]);
 
   // ---- initial load ----
   useEffect(() => {
@@ -150,12 +173,14 @@ export function usePlay(worldId: string) {
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       if (!live || ++n > 14) return; // ~2 min total with backoff
+      // v1.3: placeholders exist ~1 s after confirm and are then long-polled by id, so the list is only
+      // needed until the opening pair exists (or right after enrichment rewrote the opening).
       const [as, w] = await Promise.allSettled([
-        api.assets(worldId),
+        needOpening || n % 3 === 0 ? api.assets(worldId) : Promise.resolve([] as Asset[]),
         enriching ? api.getWorld(worldId) : Promise.resolve(null),
       ]);
       if (!live) return;
-      if (as.status === "fulfilled" && as.value.length) setAssets((old) => mergeById(old, as.value));
+      if (as.status === "fulfilled" && as.value.length) setAssets((old) => mergeAssets(old, as.value));
       if (w.status === "fulfilled" && w.value) {
         worldCache.set(w.value);
         setWorld(w.value);
@@ -169,6 +194,50 @@ export function usePlay(worldId: string) {
       clearTimeout(timer);
     };
   }, [loaded, needOpening, enriching, worldId]);
+
+  // v1.3: every pending asset (opening, key scenes, manual illustrate/tts/regenerate placeholders, ones still
+  // pending after `done`) is long-polled via GET /assets/{id}?wait=8 — one loop per id, aborted on unmount.
+  const pendingIds = assets
+    .filter(isPending)
+    .map((a) => a.id)
+    .sort()
+    .join(",");
+  const watching = useRef(new Map<string, () => void>());
+  useEffect(() => {
+    const want = new Set(pendingIds ? pendingIds.split(",") : []);
+    const m = watching.current;
+    for (const [id, off] of m)
+      if (!want.has(id)) {
+        off();
+        m.delete(id);
+      }
+    for (const id of want)
+      if (!m.has(id))
+        m.set(
+          id,
+          watchAsset(id, (a) => setAssets((old) => mergeAssets(old, [a]))),
+        );
+  }, [pendingIds]);
+  useEffect(() => {
+    const m = watching.current;
+    return () => {
+      m.forEach((off) => off());
+      m.clear();
+    };
+  }, []);
+
+  // v1.3: re-pull history when the tab comes back (post-commit review may have replaced narration).
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible")
+        api
+          .turns(worldId, 200)
+          .then(syncTurns)
+          .catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [worldId, syncTurns]);
 
   // ---- typewriter ----
   const typing = !!live && live.text.length < targetText.length;
@@ -226,6 +295,12 @@ export function usePlay(worldId: string) {
       });
       let gotDone = false;
       let blocked = false;
+      const dropNarration = () => {
+        target.current = "";
+        committed.current = null;
+        setTargetText("");
+        setLive((l) => (l ? { ...l, text: "", blocked: true } : l));
+      };
       let newOptions: Option[] | null = null;
       try {
         await streamSSE(
@@ -262,6 +337,7 @@ export function usePlay(worldId: string) {
                 break;
               }
               case "token":
+                if (blocked) break;
                 target.current += String(d.text ?? "");
                 setTargetText(target.current);
                 break;
@@ -276,12 +352,18 @@ export function usePlay(worldId: string) {
                 break;
               }
               case "asset":
-                setAssets((old) => mergeById(old, [d as unknown as Asset]));
+                // v1.3: may arrive anywhere before `done`, including upgrades of older assets
+                // (opening, earlier key scenes) — merge by id, newest version wins.
+                setAssets((old) => mergeAssets(old, [d as unknown as Asset]));
                 break;
               case "safety": {
                 const s = d as unknown as SafetyResult;
                 setSafety(s);
-                if (s.blocked) blocked = true;
+                if (s.blocked) {
+                  // v1.3: may arrive after some tokens — drop the half narration (shown + buffered).
+                  blocked = true;
+                  dropNarration();
+                }
                 break;
               }
               case "error":
@@ -291,6 +373,7 @@ export function usePlay(worldId: string) {
                 gotDone = true;
                 if (d.blocked) {
                   blocked = true;
+                  dropNarration();
                   break;
                 }
                 const turn = d.turn as Turn | undefined;
@@ -326,6 +409,13 @@ export function usePlay(worldId: string) {
           // side panels (characters, items, events, GET /ui) reflect the committed turn;
           // without server UI the local fallback recomputes from the refreshed world.
           void refreshSide();
+          // background narration review usually lands within seconds; re-sync once more later.
+          setTimeout(() => {
+            api
+              .turns(worldId, 200)
+              .then(syncTurns)
+              .catch(() => {});
+          }, 12_000);
         }
       } else {
         // nothing was committed: drop the partial narration, the pending body stays for retry.
@@ -335,7 +425,7 @@ export function usePlay(worldId: string) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [worldId, refreshSide],
+    [worldId, refreshSide, syncTurns],
   );
 
   const busy = streaming || typing || !!live;
