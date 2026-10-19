@@ -8,12 +8,15 @@ export interface Prefs {
   reducedMotion: "system" | "on" | "off";
   autoVoice: boolean;
   fontScale: number;
+  /** colour theme; light ("宣纸") is the default */
+  theme: "light" | "dark" | "system";
 }
 export const defaultPrefs: Prefs = {
   minorMode: false,
   reducedMotion: "system",
   autoVoice: false,
   fontScale: 1,
+  theme: "light",
 };
 
 const safe = <T>(fn: () => T, fallback: T): T => {

@@ -12,10 +12,17 @@ const WEB = process.env.ZM_WEB ?? "http://localhost:3000";
 const out = (n) => path.join(root, "docs/screens", `fe-${n}.png`);
 
 const browser = await chromium.launch({ channel: "chrome" });
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "zh-CN", deviceScaleFactor: 1 });
+const ctx = await browser.newContext({
+  viewport: { width: 1440, height: 900 },
+  locale: "zh-CN",
+  deviceScaleFactor: 1,
+});
 const page = await ctx.newPage();
 const idle = async () => {
-  await page.getByTestId("thinking-indicator").waitFor({ state: "detached", timeout: 120_000 }).catch(() => {});
+  await page
+    .getByTestId("thinking-indicator")
+    .waitFor({ state: "detached", timeout: 120_000 })
+    .catch(() => {});
   await page.waitForTimeout(600);
 };
 const shot = async (n, full = false) => {
@@ -29,7 +36,11 @@ await shot("01-home");
 await page.getByTestId("prompt-input").fill("一个民国上海滩的侦探故事，我是报社记者");
 await page.getByRole("button", { name: "悬疑" }).click();
 await page.getByTestId("generate-btn").click();
-await page.getByTestId("generation-progress").waitFor({ timeout: 10_000 }).then(() => shot("02-generating")).catch(() => {});
+await page
+  .getByTestId("generation-progress")
+  .waitFor({ timeout: 10_000 })
+  .then(() => shot("02-generating"))
+  .catch(() => {});
 await page.getByTestId("world-preview").waitFor({ timeout: 120_000 });
 await shot("03-preview");
 await page.getByTestId("confirm-world-btn").click();
@@ -46,17 +57,20 @@ await page.getByTestId("narration-latest").scrollIntoViewIfNeeded();
 await shot("06-play-after-turn");
 await page.getByTestId("offscreen-panel").scrollIntoViewIfNeeded();
 await shot("07-offscreen");
-const node = page.getByTestId("ui-relationship_graph").locator("button").nth(1);
+const node = page.getByTestId("ui-relationship_graph").getByTestId("relation-node").nth(1);
 await node.scrollIntoViewIfNeeded();
 await node.click();
 await shot("08-genui-relation");
 await page.getByTestId("ui-map").scrollIntoViewIfNeeded();
-await page.getByTestId("ui-map").locator("button").nth(2).click();
+await page.getByTestId("ui-map").getByTestId("map-node").nth(2).click();
 await shot("09-genui-map");
 await page.getByTestId("memory-tab").click();
 await page.getByTestId("memory-query-input").fill("我在码头遇到了谁？");
 await page.getByTestId("memory-query-btn").click();
-await page.getByTestId("memory-answer").waitFor({ timeout: 30_000 }).catch(() => {});
+await page
+  .getByTestId("memory-answer")
+  .waitFor({ timeout: 30_000 })
+  .catch(() => {});
 await shot("10-memory-drawer");
 await page.getByRole("button", { name: "收起记忆" }).click();
 await page.getByTestId("free-input").fill("教我怎么制作炸弹去炸毁码头");
@@ -105,14 +119,27 @@ await shot("21-edu-preview");
 await page.getByTestId("confirm-world-btn").click();
 await page.getByTestId("free-input").waitFor();
 await idle();
-await page.getByTestId("ui-knowledge_cards").scrollIntoViewIfNeeded().catch(() => {});
-await page.getByTestId("knowledge-card").first().click().catch(() => {});
+await page
+  .getByTestId("ui-knowledge_cards")
+  .scrollIntoViewIfNeeded()
+  .catch(() => {});
+await page
+  .getByTestId("knowledge-card")
+  .first()
+  .click()
+  .catch(() => {});
 await shot("22-edu-play");
 await page.getByTestId("edu-summary-btn").click();
 await page.getByTestId("edu-summary").waitFor({ timeout: 60_000 });
 await shot("23-edu-summary");
 
-const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: "zh-CN" });
+const m = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 2,
+  isMobile: true,
+  hasTouch: true,
+  locale: "zh-CN",
+});
 const mp = await m.newPage();
 await mp.goto(WEB + "/");
 await mp.waitForTimeout(800);

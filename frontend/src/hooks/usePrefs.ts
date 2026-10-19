@@ -44,6 +44,22 @@ export function useApplyPrefs() {
     else html.setAttribute("data-motion", prefs.reducedMotion);
     html.style.setProperty("--font-scale", String(prefs.fontScale || 1));
   }, [prefs.reducedMotion, prefs.fontScale]);
+  useEffect(() => {
+    const html = document.documentElement;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const dark = prefs.theme === "dark" || (prefs.theme === "system" && mq.matches);
+      if (dark) html.setAttribute("data-theme", "dark");
+      else html.removeAttribute("data-theme");
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute("content", dark ? "#0f1220" : "#f5f0e6");
+    };
+    apply();
+    if (prefs.theme !== "system") return;
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [prefs.theme]);
 }
 
 /** True when animations should be skipped (user pref or OS setting). */

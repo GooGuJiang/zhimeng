@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
 
@@ -11,12 +12,18 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#0c0e18",
+  themeColor: "#f5f0e6",
 };
+
+const THEME_BOOT = `try{var t=(JSON.parse(localStorage.getItem("zhimeng.prefs")||"{}").theme)||"light";if(t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches))document.documentElement.setAttribute("data-theme","dark")}catch(e){}`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" suppressHydrationWarning>
+      <head>
+        {/* apply the saved theme before first paint (no light→dark flash) */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
+      </head>
       <body>
         <AppShell>{children}</AppShell>
       </body>

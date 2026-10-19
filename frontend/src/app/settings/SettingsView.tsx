@@ -139,6 +139,27 @@ export function SettingsView() {
             </div>
             <div className="stack">
               <div className="field">
+                <span>配色主题</span>
+                <div className="chips" data-testid="theme-chips">
+                  {(
+                    [
+                      ["light", "宣纸（浅色）"],
+                      ["dark", "夜织（深色）"],
+                      ["system", "跟随系统"],
+                    ] as const
+                  ).map(([v, l]) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className={`chip${prefs.theme === v ? " on" : ""}`}
+                      onClick={() => setPrefs({ theme: v })}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="field">
                 <span>动画效果</span>
                 <div className="chips">
                   {(

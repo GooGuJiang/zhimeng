@@ -14,6 +14,7 @@
  *  - @ToAssistant(msg) → treated like @Act
  */
 import { Markdown } from "@/components/Markdown";
+import { MapCanvas, RelationCanvas } from "@/components/graphs";
 import {
   action,
   createLibrary,
@@ -257,7 +258,7 @@ const edgeSchema = z.object({
 function affinityColor(a = 0) {
   if (a >= 30) return "var(--jade)";
   if (a <= -30) return "var(--rose)";
-  return "var(--gold-dim)";
+  return "var(--muted)";
 }
 
 export const RelationGraph = defineComponent({
@@ -271,88 +272,44 @@ export const RelationGraph = defineComponent({
       () => (Array.isArray(props.nodes) ? props.nodes.filter((n) => n && n.id) : []),
       [props.nodes],
     );
-    const edges = Array.isArray(props.edges) ? props.edges.filter(Boolean) : [];
+    const edges = useMemo(
+      () => (Array.isArray(props.edges) ? props.edges.filter((e) => e && e.source && e.target) : []),
+      [props.edges],
+    );
     const [sel, setSel] = useState<string | null>(null);
-    // Player in the centre, everyone else on a ring.
-    const pos = useMemo(() => {
-      const m = new Map<string, { x: number; y: number }>();
-      const player = nodes.find((n) => n.is_player) ?? null;
-      const others = nodes.filter((n) => n !== player);
-      if (player) m.set(player.id, { x: 50, y: 50 });
-      others.forEach((n, i) => {
-        const a = (i / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2;
-        const r = player ? 36 : 38;
-        m.set(n.id, { x: 50 + Math.cos(a) * r, y: 50 + Math.sin(a) * r * 0.82 });
-      });
-      return m;
-    }, [nodes]);
     const selected = nodes.find((n) => n.id === sel);
     const related = edges.filter((e) => sel && (e.source === sel || e.target === sel));
     if (!nodes.length) return <p className="zu-text c-muted s-sm">尚无人物关系</p>;
     return (
-      <div className="zu-graph">
-        <svg viewBox="0 0 100 100" className="zu-graph-svg" role="img" aria-label="人物关系图">
-          {edges.map((e, i) => {
-            const a = pos.get(e.source);
-            const b = pos.get(e.target);
-            if (!a || !b) return null;
-            const hot = sel && (e.source === sel || e.target === sel);
-            const mx = (a.x + b.x) / 2;
-            const my = (a.y + b.y) / 2 - 4;
-            return (
-              <g key={i} className={cx("zu-edge", hot && "hot", sel && !hot && "dim")}>
-                <path
-                  d={`M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`}
-                  stroke={affinityColor(e.affinity)}
-                  strokeWidth={0.35 + Math.abs(e.affinity ?? 0) / 90}
-                  strokeDasharray={(e.affinity ?? 0) < 0 ? "1.4 1.2" : undefined}
-                  fill="none"
-                />
-                {e.type && (hot || edges.length <= 6) ? (
-                  <text x={mx} y={my + 1.6} className="zu-edge-t">
-                    {e.type}
-                  </text>
-                ) : null}
-              </g>
-            );
-          })}
-        </svg>
-        {nodes.map((n) => {
-          const p = pos.get(n.id)!;
-          return (
-            <button
-              key={n.id}
-              type="button"
-              className={cx(
-                "zu-node",
-                n.is_player && "me",
-                sel === n.id && "on",
-                sel && sel !== n.id && "dim",
-              )}
-              style={{ left: `${p.x}%`, top: `${p.y}%` }}
-              onClick={() => setSel(sel === n.id ? null : n.id)}
-              aria-pressed={sel === n.id}
-            >
-              <span className="zu-node-e" aria-hidden>
-                {n.emoji || n.label.slice(0, 1)}
-              </span>
-              <span className="zu-node-l">{n.label}</span>
-            </button>
-          );
-        })}
+      <div className="zu-graph" role="group" aria-label="人物关系图">
+        <RelationCanvas nodes={nodes} edges={edges} selected={sel} onSelect={setSel} />
+        <ul className="sr-only">
+          {nodes.map((n) => (
+            <li key={n.id}>
+              {n.label}
+              {n.role ? `（${n.role}）` : ""}
+            </li>
+          ))}
+        </ul>
         {selected ? (
           <div className="zu-pop" role="dialog" aria-label={selected.label}>
             <div className="zu-pop-h">
               <strong>{selected.label}</strong>
               {selected.role ? <span className="zu-badge t-muted">{selected.role}</span> : null}
               {selected.mood ? <span className="zu-badge t-azure">{selected.mood}</span> : null}
+              <button type="button" className="zu-pop-x" aria-label="关闭" onClick={() => setSel(null)}>
+                ×
+              </button>
             </div>
             <ul className="zu-pop-list">
               {related.map((e, i) => {
                 const other = nodes.find((n) => n.id === (e.source === sel ? e.target : e.source));
                 return (
                   <li key={i}>
-                    <span>{other?.label ?? "?"}</span>
+                    <span>
+                      {e.source === sel ? "→ " : "← "}
+                      {other?.label ?? "?"}
+                    </span>
                     <span className="c-muted">{e.type ?? "关系"}</span>
                     <span className="zu-num" style={{ color: affinityColor(e.affinity) }}>
                       {(e.affinity ?? 0) > 0 ? "+" : ""}
@@ -399,48 +356,36 @@ export const WorldMap = defineComponent({
   }),
   component: function WorldMapView({ props }) {
     const { act, streaming } = useAct();
-    const locs = Array.isArray(props.locations) ? props.locations.filter((l) => l && l.id) : [];
+    const locs = useMemo(
+      () => (Array.isArray(props.locations) ? props.locations.filter((l) => l && l.id) : []),
+      [props.locations],
+    );
+    const roads = useMemo(
+      () => (Array.isArray(props.edges) ? props.edges.filter((e) => e && e.source && e.target) : []),
+      [props.edges],
+    );
     const [sel, setSel] = useState<string | null>(null);
-    const byId = new Map(locs.map((l) => [l.id, l]));
-    const P = (v: number) => 8 + (Math.max(0, Math.min(100, Number(v) || 0)) / 100) * 84;
-    const s = sel ? byId.get(sel) : null;
+    const s = sel ? locs.find((l) => l.id === sel) : null;
     if (!locs.length) return <p className="zu-text c-muted s-sm">地图尚未展开</p>;
     return (
-      <div className="zu-map">
-        <svg viewBox="0 0 100 70" className="zu-map-svg" preserveAspectRatio="none" aria-hidden>
-          <defs>
-            <pattern id="zu-grain" width="4" height="4" patternUnits="userSpaceOnUse">
-              <circle cx="1" cy="1" r="0.18" fill="currentColor" opacity="0.25" />
-            </pattern>
-          </defs>
-          <rect width="100" height="70" fill="url(#zu-grain)" />
-          {(props.edges ?? []).map((e, i) => {
-            const a = byId.get(e.source);
-            const b = byId.get(e.target);
-            if (!a || !b) return null;
-            return (
-              <line key={i} x1={P(a.x)} y1={P(a.y) * 0.7} x2={P(b.x)} y2={P(b.y) * 0.7} className="zu-road" />
-            );
-          })}
-        </svg>
-        {locs.map((l) => (
-          <button
-            key={l.id}
-            type="button"
-            className={cx("zu-pin", l.id === props.current && "here", sel === l.id && "on")}
-            style={{ left: `${P(l.x)}%`, top: `${P(l.y)}%` }}
-            onClick={() => setSel(sel === l.id ? null : l.id)}
-            aria-label={`${l.name}${l.id === props.current ? "（当前位置）" : ""}`}
-          >
-            <span className="zu-pin-dot" />
-            <span className="zu-pin-l">{l.name}</span>
-          </button>
-        ))}
+      <div className="zu-map" role="group" aria-label="世界地图">
+        <MapCanvas locations={locs} edges={roads} current={props.current} selected={sel} onSelect={setSel} />
+        <ul className="sr-only">
+          {locs.map((l) => (
+            <li key={l.id}>
+              {l.name}
+              {l.id === props.current ? "（当前位置）" : ""}
+            </li>
+          ))}
+        </ul>
         {s ? (
           <div className="zu-pop zu-pop-map">
             <div className="zu-pop-h">
               <strong>{s.name}</strong>
               {s.id === props.current ? <span className="zu-badge t-gold">你在这里</span> : null}
+              <button type="button" className="zu-pop-x" aria-label="关闭" onClick={() => setSel(null)}>
+                ×
+              </button>
             </div>
             {s.description ? <p className="zu-text s-xs c-muted">{s.description}</p> : null}
             {s.characters?.length ? <p className="zu-text s-xs">在场：{s.characters.join("、")}</p> : null}

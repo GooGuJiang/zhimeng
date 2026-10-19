@@ -82,7 +82,7 @@ flowchart LR
 
 | 层 | 技术 |
 |---|---|
-| 前端 | Next.js (App Router) · React · TypeScript · pnpm · OpenUI（`@openuidev/react-lang` 生成式 UI）· lucide-react · html-to-image（海报）· MediaRecorder（结局短视频）· ESLint + Prettier |
+| 前端 | Next.js (App Router) · React · TypeScript · pnpm · OpenUI（`@openuidev/react-lang` 生成式 UI）· React Flow（`@xyflow/react`，人物关系图 / 世界地图）+ d3-force（自动布局）· react-markdown + remark-gfm · lucide-react · html-to-image（海报）· MediaRecorder（结局短视频）· ESLint + Prettier |
 | 后端 | Python 3.12 · FastAPI · SSE 流式输出 · LangGraph（导演/世界/角色/UI 多智能体编排）· Pydantic |
 | 存储 | SQLite（结构化世界状态）· ChromaDB（语义记忆向量库）· 本地文件（生成资产） |
 | 模型 | 阿里云百炼 DashScope：qwen-plus（叙事）、qwen-turbo（快速决策/审核）、text-embedding-v3（向量）、通义万相（插画）、qwen3-tts-flash（配音） |
@@ -180,7 +180,7 @@ pnpm test                         # AC-1 ~ AC-9
 ZM_MODE=real pnpm test            # 真实模型模式（放宽超时；回合被限流失败时像用户一样点「重试」，次数记入测试注解）
 pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/（ZM_MODE=real pnpm demo 用真实模型）
 
-# 前端 mock 回归（只需前端在跑；含世界面板吸顶 / Markdown 渲染 / 手机端切换，截图 fe-30~fe-32）
+# 前端 mock 回归（只需前端在跑；含世界面板吸顶 / Markdown / 手机端切换 / 关系图与地图 / 主题与对比度，截图 fe-30~fe-37）
 cd frontend && ZM_WEB=http://localhost:3000 pnpm test:mock
 
 # API 冒烟打到运行中的服务（例如真实模型模式）
@@ -194,8 +194,22 @@ ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tes
 - **世界面板吸顶**：桌面端右侧「世界面板」随页面滚动固定在顶栏下方（内容超出时面板内部独立滚动），回合流式生成时实时刷新；手机端改为顶部吸附的「故事 / 世界面板」切换。
 - **Markdown 渲染**：旁白、开场、世界设定、记忆问答、学习小结、场外事件与生成式 UI 文本均按 Markdown（GFM：标题、粗斜体、列表、引用、代码、表格）渲染；不渲染原始 HTML、不加载模型给出的远程图片；流式输出中未闭合的 `**` / `` ` `` / ``` 会临时补齐，避免闪烁。
 
+- **图表库渲染**：「人物关系」与「世界地图 / 舆图 / 众生分布」改用 React Flow（`@xyflow/react`）绘制，支持拖动画布、按钮/双指缩放、一键适配视图（为不抢页面滚动，滚轮不缩放）。
+  - 人物关系：d3-force 力导向自动布局，玩家固定居中；节点按身份/阵营着色（巡捕·官府=石青、帮派=胭脂、文人·记者=松绿、商贾=赭石、伶人=绛紫）；连线按好感着色（≥30 绿、≤-30 红色虚线），标签写明关系与好感值，A↔B 双向关系合并为一条；点选人物高亮其关系网并给出「去找 TA 谈谈」。
+  - 世界地图：以世界设定中的坐标为锚点，碰撞力自动错开重叠地点；当前位置脉冲高亮并标「你在这里」，与当前位置相连的道路实线高亮、相邻地点描蓝，地点右侧数字为在场人物数；点选地点可「前往」。
+  - 两者都在 OpenUI 生成式组件内部（`RelationGraph` / `WorldMap`），仅在客户端懒加载（SSR 输出占位），随 SSE 回合与 `GET /ui` 实时刷新。
+- **配色**：默认改为浅色「宣纸」主题——暖白纸面、松烟墨正文（对比度 ≥ 7:1）、赭石主色、胭脂 / 石青 / 松绿点缀，辅助文字 ≥ 4.5:1（WCAG AA，见 `frontend/tests/graphs-theme.spec.ts`）。原深色「夜织」主题保留为可选：顶栏右侧 🌙/☀ 一键切换，或在「设置 → 阅读与动效 → 配色主题」选 浅色 / 深色 / 跟随系统；选择保存在本地并在首帧前生效（无闪烁）。
+
 ![世界面板吸顶](docs/screens/fe-30-sticky-world.png)
 ![Markdown 渲染](docs/screens/fe-31-markdown.png)
+
+| 人物关系（React Flow） | 世界地图（React Flow） |
+|---|---|
+| ![人物关系](docs/screens/fe-33-relation-graph.png) | ![世界地图](docs/screens/fe-34-world-map.png) |
+
+| 首页（宣纸浅色） | 游玩页（宣纸浅色） | 游玩页（夜织深色，可选） |
+|---|---|---|
+| ![首页](docs/screens/fe-36-home-light.png) | ![游玩](docs/screens/fe-35-play-light.png) | ![深色](docs/screens/fe-37-play-dark.png) |
 
 ## 演示脚本
 
