@@ -48,7 +48,7 @@ export BACKEND_ORIGIN="${BACKEND_ORIGIN:-http://localhost:$BACKEND_PORT}"
 if [[ "${ZM_FORCE_FALLBACK:-0}" =~ ^(1|true|yes)$ ]]; then
   echo "[dev] 模型模式: 本地兜底 (ZM_FORCE_FALLBACK=1)"
 elif [[ -n "${DASHSCOPE_API_KEY:-}" ]]; then
-  echo "[dev] 模型模式: 阿里云百炼 (DASHSCOPE_API_KEY 已配置, 长度 ${#DASHSCOPE_API_KEY})"
+  echo "[dev] 模型模式: 阿里云百炼 (DASHSCOPE_API_KEY 已配置)"
 else
   echo "[dev] 模型模式: 本地兜底 (未配置 DASHSCOPE_API_KEY)"
 fi

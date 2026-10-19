@@ -56,11 +56,27 @@ export function freeInput(page: Page) {
   return el(page, "free-input", page.getByPlaceholder(/行动|输入|做什么/)).first();
 }
 
-export async function waitIdle(page: Page) {
+/** 回合失败时（API.md: error → 未提交，可重试）点「重试」的次数，测试结束会写进注解。 */
+export const retryLog: string[] = [];
+
+async function idleOnce(page: Page) {
   // thinking indicator appears then disappears; tolerate it never appearing (instant fallback)
   const ind = page.getByTestId("thinking-indicator");
   await expect(ind).toHaveCount(0, { timeout: REAL ? 180_000 : 60_000 });
   await expect(freeInput(page)).toBeEnabled({ timeout: REAL ? 180_000 : 60_000 });
+}
+
+export async function waitIdle(page: Page, maxRetries = REAL ? 2 : 0) {
+  await idleOnce(page);
+  // 用户可见的失败重试：真实模型被限流/断流时，像真实用户一样点「重试」（兜底模式不重试，失败即失败）
+  for (let i = 0; i < maxRetries; i++) {
+    const retry = page.locator('main [data-testid="retry-btn"]').or(page.getByRole("button", { name: /^重试$/ })).first();
+    if (!(await retry.isVisible().catch(() => false))) return;
+    retryLog.push(`${new Date().toISOString()} ${page.url()}`);
+    await retry.click();
+    await page.waitForTimeout(300);
+    await idleOnce(page);
+  }
 }
 
 export async function narrationText(page: Page) {
@@ -100,5 +116,10 @@ export async function apiJson<T = any>(request: APIRequestContext, path: string)
 }
 
 export async function shot(page: Page, name: string) {
+  // 等有限时长的 CSS/Web 动画（入场淡入、遮罩）播完；无限循环动画忽略
+  await page.waitForFunction(() => document.getAnimations().every((a) => {
+    const it = a.effect?.getTiming().iterations;
+    return a.playState !== "running" || it === Infinity;
+  }), null, { timeout: 8_000 }).catch(() => {});
   await page.screenshot({ path: `../../docs/screens/${name}.png`, fullPage: false });
 }

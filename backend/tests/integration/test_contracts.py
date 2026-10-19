@@ -93,11 +93,22 @@ def test_multimodal_fallback_image_audio_cache_regen(mm):
     assert a.type == "image" and a.url and a.source == ("dashscope" if REAL else "fallback")
     assert _asset_file(a.url).exists() and _asset_file(a.url).stat().st_size > 0
     b = run(mm.illustrate(wid, "民国上海外滩夜景，报社记者"))
-    # 兜底模式下有意不缓存行（便于之后用真实模型替换），但必须复用同一占位文件
-    assert b.id == a.id or b.url == a.url, "same prompt must reuse cached asset/file"
+    assert b.id == a.id and b.url == a.url, "same world+prompt must return the same asset (BUG-005)"
     t = run(mm.speak(wid, "夜色笼罩着外滩。"))
+    t2 = run(mm.speak(wid, "夜色笼罩着外滩。"))
+    assert t2.id == t.id, "same world+text speak must return the same asset (BUG-005)"
     assert t.type == "audio" and t.source == ("dashscope" if REAL else "fallback") and _asset_file(t.url).exists()
     r = run(mm.regenerate(a.id))
     assert r is not None and r.id != a.id and r.type == "image"
-    types = {x.type for x in mm.list_assets(wid)}
-    assert {"image", "audio"} <= types
+    listed = mm.list_assets(wid)
+    assert {"image", "audio"} <= {x.type for x in listed}
+    assert len([x for x in listed if x.url == a.url]) == 1, "no duplicate rows for the same prompt (BUG-005)"
+
+
+@pytest.mark.skipif(not REAL, reason="real-model only (ZM_QA_REAL=1)")
+def test_tts_legacy_model_name_still_works():
+    """BUG-002 回归：显式传旧模型名 qwen-tts 也能拿到音频（别名映射 / 自动重试）。"""
+    from app.multimodal import dashscope_api as ds
+
+    data = run(ds.text_to_speech("夜色笼罩着外滩。", "Cherry", model="qwen-tts"))
+    assert isinstance(data, (bytes, bytearray)) and len(data) > 1000

@@ -6,10 +6,15 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import {
   AI_LABEL, API, DEMO_PROMPT, REAL, apiJson, confirmWorld, createAndEnter, el, freeInput, generateWorld,
-  health, narrationText, playTurn, waitIdle,
+  health, narrationText, playTurn, retryLog, waitIdle,
 } from "./helpers";
 
-test.describe.configure({ mode: "serial" });
+// 各用例互相独立（各自新建世界），失败不阻断后续用例
+test.describe.configure({ mode: "default" });
+
+test.afterEach(() => {
+  if (retryLog.length) test.info().annotations.push({ type: "turn-retries", description: retryLog.splice(0).join(" | ") });
+});
 
 let llm = false;
 test.beforeAll(async ({ request }) => {
@@ -164,7 +169,7 @@ test("AC-7 安全过滤：违规输入被拦截，生成内容有分级与AI标�
     if (await reason.isVisible().catch(() => false)) await reason.fill("测试举报");
     await submit.click();
   }
-  await expect.poll(async () => (await apiJson<any[]>(request, `/api/reports`)).length, { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await apiJson<any[]>(request, `/api/reports?world_id=${wid}`)).length, { timeout: 10_000 }).toBeGreaterThan(0);
 });
 
 test("AC-8 存档与分享：刷新恢复进度；导出存档/海报/短视频", async ({ page, request }) => {

@@ -11,9 +11,19 @@ from conftest import DEMO_PROMPT, LIVE, REAL, all_of, first
 AI_LABEL = "内容由AI生成"
 
 
-def play(api, wid, action, **extra):
+TURN_ERRORS: list[str] = []  # 真实模型模式下记录被客户端重试的 error 事件（见 BUGS.md BUG-006）
+
+
+def play(api, wid, action, retries: int = 2, **extra):
+    """按 API.md：收到 `error` 时未提交任何内容，客户端用同一 body 重发。"""
     body = {"action": action, "client_turn_id": str(uuid.uuid4()), **extra}
-    return api.sse(f"/api/worlds/{wid}/turns", body)
+    for attempt in range(retries + 1):
+        ev = api.sse(f"/api/worlds/{wid}/turns", body)
+        err = first(ev, "error")
+        if not err or first(ev, "done"):
+            return ev
+        TURN_ERRORS.append(f"{action}: {err}")
+    return ev
 
 
 def test_health(api):
@@ -22,6 +32,8 @@ def test_health(api):
     j = r.json()
     assert j["status"] == "ok"
     assert "llm" in j and "models" in j
+    if not LIVE and not REAL:
+        assert j.get("fallback") is True, "health.fallback (API v1.1)"
 
 
 # ---------------- AC-1 ----------------
@@ -145,6 +157,10 @@ def test_ac5_multimodal_assets(api, world):
     for asset in (a, tts.json()):
         f = api.get(asset["url"] if asset["url"].startswith("/") else "/" + asset["url"])
         assert f.status_code == 200 and len(f.content) > 0, asset["url"]
+    # BUG-004 回归：统一路径 /api/static/assets，旧 /static/assets 为兼容别名
+    assert a["url"].startswith("/api/static/assets/"), a["url"]
+    alias = api.get(a["url"].replace("/api/static/", "/static/", 1))
+    assert alias.status_code == 200, "deprecated /static/assets alias"
     regen = api.post(f"/api/assets/{a['id']}/regenerate")
     assert regen.status_code == 200 and regen.json()["id"] != a["id"]
     assets = api.get(f"/api/worlds/{wid}/assets").json()
@@ -185,6 +201,10 @@ def test_ac7_safety(api, world):
     assert pol["ai_label"] == AI_LABEL and pol["ratings"]
     rep = api.post("/api/reports", {"world_id": wid, "content": "x", "reason": "测试举报"})
     assert rep.status_code == 200 and rep.json()["status"] == "received"
+    # API v1.2：列表按 world_id 限定；无 world_id 且无管理员令牌 → 403
+    mine = api.get("/api/reports", params={"world_id": wid})
+    assert mine.status_code == 200 and any(r.get("id") == rep.json()["id"] for r in mine.json()), mine.text[:200]
+    assert api.get("/api/reports").status_code == 403
     # world gen with blocked prompt
     ev = api.sse("/api/worlds/generate", {"prompt": "一个教人制毒贩毒的世界"})
     assert (first(ev, "safety") or {}).get("blocked"), [n for n, _ in ev]

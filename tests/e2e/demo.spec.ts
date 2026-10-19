@@ -29,14 +29,17 @@ test("演示：民国上海滩侦探全流程", async ({ page }) => {
   await page.waitForTimeout(400);
   await shot(page, "02-generating");
   await expect(el(page, "world-preview").first()).toBeVisible({ timeout: REAL ? 120_000 : 30_000 });
+  await page.waitForTimeout(1500); // 等入场动画结束再截图
   await shot(page, "03-world-preview");
   await el(page, "confirm-world-btn", page.getByRole("button", { name: /进入世界|确认|开始/ })).first().click();
   await expect(freeInput(page)).toBeVisible({ timeout: 30_000 });
   await waitIdle(page);
+  await page.waitForTimeout(2000); // 等页面入场动画结束
   await shot(page, "04-opening");
 
   // 2. 游玩三轮：NPC 自主行动、插画与配音
   for (const a of ["我去十六铺码头找线人阿四打听消息", "跟踪可疑的黄包车夫", "回报社向主编汇报"]) await playTurn(page, a);
+  await page.waitForTimeout(1000);
   await shot(page, "05-play-3-turns");
 
   // 3. 考记忆

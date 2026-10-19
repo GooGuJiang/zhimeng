@@ -61,7 +61,7 @@ flowchart LR
     QW["通义千问 qwen-plus / qwen-turbo"]
     EMB["text-embedding-v3"]
     WX["通义万相 文生图"]
-    TTS["qwen-tts 语音合成"]
+    TTS["qwen3-tts-flash 语音合成"]
   end
 
   UI -- "fetch + SSE 流" --> RW --> R
@@ -85,7 +85,7 @@ flowchart LR
 | 前端 | Next.js (App Router) · React · TypeScript · pnpm · OpenUI（`@openuidev/react-lang` 生成式 UI）· lucide-react · html-to-image（海报）· MediaRecorder（结局短视频）· ESLint + Prettier |
 | 后端 | Python 3.12 · FastAPI · SSE 流式输出 · LangGraph（导演/世界/角色/UI 多智能体编排）· Pydantic |
 | 存储 | SQLite（结构化世界状态）· ChromaDB（语义记忆向量库）· 本地文件（生成资产） |
-| 模型 | 阿里云百炼 DashScope：qwen-plus（叙事）、qwen-turbo（快速决策/审核）、text-embedding-v3（向量）、通义万相（插画）、qwen-tts（配音） |
+| 模型 | 阿里云百炼 DashScope：qwen-plus（叙事）、qwen-turbo（快速决策/审核）、text-embedding-v3（向量）、通义万相（插画）、qwen3-tts-flash（配音） |
 | 质量 | pytest（API 冒烟，覆盖 AC-1~AC-9）· Playwright（端到端 UI 验收） |
 
 ## 功能模块 F1–F10
@@ -152,7 +152,7 @@ pnpm dev            # http://localhost:3000
 | `ZM_DATA_DIR` | `backend/data` | SQLite、ChromaDB、生成资产所在目录 |
 | `CHAT_MODEL` / `FAST_MODEL` | `qwen-plus` / `qwen-turbo` | 叙事模型 / 快速决策与审核模型 |
 | `EMBEDDING_MODEL` | `text-embedding-v3` | 记忆向量模型 |
-| `IMAGE_MODEL` / `TTS_MODEL` | `wanx2.1-t2i-turbo` / `qwen-tts` | 插画 / 配音模型（实测部分账号 `qwen-tts` 返回 “Model not exist”，可设 `TTS_MODEL=qwen3-tts-flash`，见 BUGS.md BUG-002） |
+| `IMAGE_MODEL` / `TTS_MODEL` | `wanx2.1-t2i-turbo` / `qwen3-tts-flash` | 插画 / 配音模型（旧名 `qwen-tts` 会自动映射，见 BUGS.md BUG-002） |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
 | `NEXT_PUBLIC_API_BASE` | 空 | 可选：让浏览器直连后端（默认同源代理） |
@@ -168,7 +168,7 @@ scripts/qa.sh e2e        # 只跑 E2E（需应用已运行）
 # E2E（需先 scripts/dev.sh 启动应用；使用系统 Chrome）
 cd tests/e2e && pnpm install
 pnpm test                         # AC-1 ~ AC-9
-ZM_MODE=real pnpm test            # 真实模型模式（放宽超时）
+ZM_MODE=real pnpm test            # 真实模型模式（放宽超时；回合被限流失败时像用户一样点「重试」，次数记入测试注解）
 pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/（ZM_MODE=real pnpm demo 用真实模型）
 
 # API 冒烟打到运行中的服务（例如真实模型模式）
@@ -209,7 +209,7 @@ ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tes
 |---|---|
 | 后端工程师 | FastAPI 路由与 SSE、LangGraph 多智能体编排（导演/世界/角色/UI Agent）、世界记忆（SQLite + ChromaDB）、F1–F4、F6–F8、F10 |
 | 前端工程师 | Next.js + pnpm、沉浸式叙事界面与设计系统、OpenUI 生成式 UI 组件库、流式渲染、上帝视角/教育/分享页面、响应式 |
-| 多模态与安全工程师 | F5 插画与配音（通义万相、qwen-tts、缓存与占位）、F9 双向内容过滤、分级、未成年人模式、危机拦截、举报 |
+| 多模态与安全工程师 | F5 插画与配音（通义万相、qwen3-tts-flash、缓存与占位）、F9 双向内容过滤、分级、未成年人模式、危机拦截、举报 |
 | QA / 集成工程师 | 一键启动脚本、API 冒烟与 Playwright E2E（AC-1~AC-9）、回归与缺陷跟踪、README 与演示截图 |
 
 协作约定见 [TEAM.md](TEAM.md)。
