@@ -68,6 +68,7 @@ class TurnCtx:
         self.options: list[Option] = []
         self.turn: Turn | None = None
         self.moved = False
+        self.arrived: str | None = None
         self.recent = ""
 
 
@@ -130,6 +131,12 @@ async def node_memory(state: TurnState) -> TurnState:
     ctx = state["ctx"]
     w = ctx.world
     await _progress(ctx, "memory", "翻阅世界记忆…", 15)
+    dest = fallback.detect_location(w, ctx.action)  # 行动里的目的地先生效（叙事/焦点 NPC 以新地点为准）
+    if dest and dest != w.state.player_location_id:
+        w.state.player_location_id, ctx.moved = dest, True
+        if p := w.char("player"):
+            p.location_id = dest
+        ctx.arrived = dest
     loc = w.loc(w.state.player_location_id)
     query = f"{ctx.action} {loc.name if loc else ''} " + " ".join(r.summary for r in ctx.injects)
     cites = await store.search(w.id, query, top_k=5, before_turn=ctx.index)
@@ -231,12 +238,15 @@ async def node_extract(state: TurnState) -> TurnState:
     w = ctx.world
     await _progress(ctx, "extract", "提取关键事实，校验一致性…", 80)
     verdict = await guard.check_output(ctx.narration, minor_mode=w.minor_mode, rating=w.rating)
+    # 流式分片可能切开敏感词（filter_chunk 拦不住）→ 入库/返回的叙事一律用全文 check_output 的 filtered_text
     if verdict.blocked:
         await ctx.emit("safety", verdict.model_dump())
         ctx.narration = guard.SAFE_NOTICE
     else:
-        ctx.narration = verdict.filtered_text or ctx.narration
+        ctx.narration = verdict.filtered_text if verdict.filtered_text is not None else ctx.narration
     ex = await director.extract(w, ctx.action, ctx.narration, ctx.focus)
+    if ctx.arrived and (loc := w.loc(ctx.arrived)):
+        ex.setdefault("facts", []).append(f"你来到了{loc.name}")
     ctx.extraction = ex
     _apply(ctx, state.get("world_tick") or {}, ex)
     return {"extracted": True}
@@ -340,7 +350,7 @@ async def node_persist(state: TurnState) -> TurnState:
                           event_ids=[e.id for e in ctx.events], key_scene=key, client_turn_id=ctx.client_turn_id,
                           state_before={"world": ctx.snapshot, "consumed": inject_ids, "option_id": ctx.option_id}))
         base = {"turn": ctx.index, "chapter": ctx.chapter}
-        mems = [{"content": f"第{ctx.index}回合，你：{ctx.action}。{ctx.narration[:120]}", "kind": "event",
+        mems = [{"content": f"第{ctx.index}回合，你{fallback.second_person(ctx.action)}。{ctx.narration[:100]}", "kind": "event",
                  **base, "refs": {"turn_id": turn_id}}]
         mems += [{"content": f, "kind": "fact", **base, "refs": {"turn_id": turn_id}} for f in facts]
         mems += [{"content": f"{names.get(e.actor_ids[0], '') + '：' if e.actor_ids and not e.summary.startswith(names.get(e.actor_ids[0], '?')) else ''}{e.summary}",
@@ -375,6 +385,8 @@ async def _compress_chapter(world: World, chapter: int) -> None:
     if not turns or any(s.chapter == chapter for s in repo.list_summaries(world.id)):
         return
     text = await director.chapter_summary(world, chapter, turns)
+    v = await guard.check_output(text, minor_mode=world.minor_mode, rating=world.rating)
+    text = v.filtered_text or text
     repo.add_summary(world.id, chapter, turns[0].index, turns[-1].index, text)
     await store.add_memories(world.id, [{"content": text, "kind": "summary", "turn": turns[-1].index,
                                          "chapter": chapter, "refs": {"chapter": chapter}}])
@@ -416,6 +428,7 @@ async def key_scene_media(world: World, turn: Turn, narration: str, emit: Emit |
     loc = world.loc(world.state.player_location_id)
 
     async def job() -> list[Any]:
+        # key_scene_assets 从 world["minor_mode"] 读取未成年人模式（插画负面词更严格）
         assets = await multimodal.key_scene_assets(world.model_dump(mode="json"), narration, turn_id=turn.id,
                                                    location=loc.name if loc else None)
         if not any(a.type == "audio" for a in assets):  # 远程 TTS 不可用 → 占位音频（prompt 可供 Web Speech 朗读）
@@ -554,7 +567,7 @@ def spawn_opening_media(world: World) -> None:
             loc = world.loc(world.state.player_location_id)
             prompt = multimodal.build_scene_prompt(world.model_dump(mode="json"), world.opening_scene,
                                                    loc.name if loc else None, world.minor_mode)
-            await multimodal.illustrate(world.id, prompt)
+            await multimodal.illustrate(world.id, prompt, minor_mode=world.minor_mode)
         except Exception:  # noqa: BLE001
             log.exception("opening illustration failed")
     _spawn(job())

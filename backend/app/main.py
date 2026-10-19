@@ -68,6 +68,14 @@ for _name in ROUTE_MODULES:
         continue
     app.include_router(_mod.router, prefix="/api")
 
+class AssetFiles(StaticFiles):
+    """每次请求按当前配置解析 assets 目录（ZM_DATA_DIR 可在进程内切换，如测试）。"""
+
+    def lookup_path(self, path: str):
+        self.all_directories = [str(get_settings().assets_dir)]
+        return super().lookup_path(path)
+
+
 # 静态资源：契约路径 /api/static/assets；/static/assets 作为兼容别名（前端代理两者均可）
-app.mount("/api/static/assets", StaticFiles(directory=str(settings.assets_dir)), name="assets")
-app.mount("/static/assets", StaticFiles(directory=str(settings.assets_dir)), name="assets_compat")
+app.mount("/api/static/assets", AssetFiles(directory=str(settings.assets_dir), check_dir=False), name="assets")
+app.mount("/static/assets", AssetFiles(directory=str(settings.assets_dir), check_dir=False), name="assets_compat")

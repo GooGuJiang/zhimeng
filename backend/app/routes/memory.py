@@ -66,7 +66,8 @@ async def query(world_id: str, body: MemoryQuery):
     ranked.sort(key=lambda c: -c.score)
     top = ranked[:body.top_k]
     answer = await director.answer_question(w, body.question, top)
-    return MemoryAnswer(answer=guard.filter_chunk(answer, minor_mode=w.minor_mode), citations=top, ai_label=AI_LABEL)
+    v = await guard.check_output(answer, minor_mode=w.minor_mode, rating=w.rating)
+    return MemoryAnswer(answer=v.filtered_text or (guard.SAFE_NOTICE if v.blocked else answer), citations=top, ai_label=AI_LABEL)
 
 
 @router.get("/worlds/{world_id}/summaries")

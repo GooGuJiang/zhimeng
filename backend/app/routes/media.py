@@ -35,13 +35,17 @@ async def illustration(world_id: str, body: IllustrationRequest):
         loc = w.loc(w.state.player_location_id)
         prompt = multimodal.build_scene_prompt(w.model_dump(mode="json"), narration, loc.name if loc else None,
                                                w.minor_mode)
-    return await multimodal.illustrate(world_id, prompt, turn_id=body.turn_id)
+    return await multimodal.illustrate(world_id, prompt, turn_id=body.turn_id, minor_mode=w.minor_mode)
 
 
 @router.post("/worlds/{world_id}/assets/tts", response_model=Asset)
 async def tts(world_id: str, body: TTSRequest):
     w = world_or_404(world_id)
-    text = guard.filter_chunk(body.text, minor_mode=w.minor_mode)
+    # speak() 没有 minor_mode 参数：配音文本先按世界的未成年人模式/分级过 check_output
+    v = await guard.check_output(body.text, minor_mode=w.minor_mode, rating=w.rating)
+    if v.blocked:
+        raise HTTPException(400, v.message or "配音文本未通过安全审核")
+    text = v.filtered_text or body.text
     return await multimodal.speak(world_id, text, voice=body.voice, turn_id=body.turn_id)
 
 

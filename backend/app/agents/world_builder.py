@@ -197,9 +197,12 @@ async def generate_world_events(req: GenerateWorldRequest, world_id: str | None 
         yield "safety", out.model_dump()
         world = normalize_world(fallback.build_world_dict("", None, None, req.length), world_id=world_id, req=req, source="fallback")
         source = "fallback"
-    world.opening_scene = guard.filter_chunk(world.opening_scene, minor_mode=req.minor_mode)
-    world.setting = guard.filter_chunk(world.setting, minor_mode=req.minor_mode)
-    world.initial_conflict = guard.filter_chunk(world.initial_conflict, minor_mode=req.minor_mode)
+    # 入库文本一律使用 check_output 的 filtered_text（None 时回退原文）
+    for field in ("opening_scene", "setting", "initial_conflict", "premise"):
+        orig = getattr(world, field)
+        if orig:
+            r = await guard.check_output(orig, minor_mode=req.minor_mode, rating=req.rating)
+            setattr(world, field, guard.SAFE_NOTICE if r.blocked and not r.filtered_text else (r.filtered_text or orig))
     world.state.flags["gen_request"] = req.model_dump()
     if edu:
         world.state.flags["edu"] = edu

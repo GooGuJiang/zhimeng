@@ -254,10 +254,30 @@ NPC_LINES = ["这件事你最好别管。", "我知道的都告诉你了……�
 NPC_ACTIONS = ["放下手中的东西", "压低了声音", "皱起眉头", "露出意味深长的笑", "警惕地环顾四周", "递给你一张纸条"]
 
 
+def second_person(action: str) -> str:
+    """玩家行动转第二人称片段：“我去码头” → “去码头”，句中“我”→“你”。"""
+    act = action.strip().rstrip("。.!！")
+    act = re.sub(r"^(?:我|你)(?:们)?", "", act)
+    return act.replace("我", "你") or "环顾四周"
+
+
+def detect_location(world: Any, action: str) -> str | None:
+    """从行动文本识别目的地：全名 > 名称后两字（如“码头”“茶楼”）。"""
+    best = None
+    for l in world.locations:
+        if not l.name:
+            continue
+        if l.name in action:
+            return l.id
+        if best is None and len(l.name) >= 3 and l.name[-2:] in action:
+            best = l.id
+    return best
+
+
 def narrate(world: Any, action: str, focus: Any | None, events: list[str], injects: list[str], turn: int) -> str:
     rng = seed_rng(world.id, turn, action)
     loc = world.loc(world.state.player_location_id)
-    act = action.strip().rstrip("。.!！")
+    act = second_person(action)
     parts = [rng.choice(NARRATION_BITS["open"]).format(act=act)]
     if loc:
         parts.append(rng.choice(NARRATION_BITS["scene"]).format(loc=loc.name, desc=loc.description))
@@ -267,7 +287,7 @@ def narrate(world: Any, action: str, focus: Any | None, events: list[str], injec
         parts.append(rng.choice(NARRATION_BITS["npc"]).format(npc=focus.name, npc_action=rng.choice(NPC_ACTIONS),
                                                             line=rng.choice(NPC_LINES)))
     for e in events[:1]:
-        parts.append(rng.choice(NARRATION_BITS["event"]).format(event=e))
+        parts.append(rng.choice(NARRATION_BITS["event"]).format(event=e.rstrip("。") + "。"))
     if world.mode == "education" and world.knowledge_cards:
         k = world.knowledge_cards[turn % len(world.knowledge_cards)]
         parts.append(f"讲述先生补充道：“{k.content}”")

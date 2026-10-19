@@ -46,13 +46,8 @@ _GIVE_RE = re.compile(r"(?:给了我|交给我|递给我|得到了?|拿到了?|�
 
 def fallback_extract(world: World, action: str, narration: str, focus: Any) -> dict[str, Any]:
     """确定性事实抽取：地点移动、获得物品、关键事实。"""
-    act = action.strip().rstrip("。.!！")
-    facts = [f"你{act}" if not act.startswith(("我", "你")) else ("你" + act[1:])]
-    loc_id = None
-    for l in sorted(world.locations, key=lambda l: -len(l.name)):
-        if l.name and (l.name in action or (len(l.name) >= 3 and l.name[:2] in action and "去" in action)):
-            loc_id = l.id
-            break
+    facts = [f"你{fallback.second_person(action)}"]
+    loc_id = fallback.detect_location(world, action)
     gained = []
     m = _GIVE_RE.search(action)
     if m:
@@ -60,7 +55,7 @@ def fallback_extract(world: World, action: str, narration: str, focus: Any) -> d
         name = re.sub(r"^刻着[^的]{1,6}的", "", name) or name
         if name:
             gained.append({"name": name[:10], "description": f"第{world.state.turn + 1}回合获得：{m.group(0)[:30]}"})
-            facts.append(f"你获得了{m.group(1)}")
+            facts.append(f"你获得了{m.group(1).replace('我', '你')}")
     if loc_id and loc_id != world.state.player_location_id:
         facts.append(f"你来到了{world.loc(loc_id).name}")  # type: ignore[union-attr]
     if focus is not None:
@@ -95,7 +90,7 @@ async def chapter_summary(world: World, chapter: int, turns: list[Any]) -> str:
                               temperature=0.3, max_tokens=300)
         if out and out.strip():
             return out.strip()[:400]
-    acts = "；".join(t.action.strip().rstrip("。") for t in turns)
+    acts = "；".join(fallback.second_person(t.action) for t in turns)
     facts = "；".join(f for t in turns for f in (t.facts or [])[1:2])
     return f"第{chapter}章（第{turns[0].index}-{turns[-1].index}回合）：你{acts}。" + (f"要点：{facts}。" if facts else "")
 
@@ -110,7 +105,7 @@ async def answer_question(world: World, question: str, cites: list[Citation]) ->
         if out and out.strip():
             return out.strip()
     top = cites[:2]
-    body = "；".join(f"{c.content}[{i + 1}]" for i, c in enumerate(top))
+    body = "；".join(f"{c.content[:70]}{'…' if len(c.content) > 70 else ''}[{i + 1}]" for i, c in enumerate(top))
     return f"根据世界记忆：{body}。（出处：{'、'.join(c.source for c in top)}）"
 
 

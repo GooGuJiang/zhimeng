@@ -47,9 +47,9 @@ async def check_input(text: str, *, minor_mode: bool = False, rating: str = "tee
     fn = safety.check_input
     try:
         return _coerce(await fn(text, **_kwargs(fn, minor_mode=minor_mode, rating=rating, context=context)))
-    except Exception as e:  # noqa: BLE001 - 安全模块异常时保守放行但记录（关键词兜底由 filter_chunk 负责）
-        log.exception("safety.check_input failed: %s", e)
-        return SafetyResult()
+    except Exception as e:  # noqa: BLE001
+        log.exception("safety.check_input failed → fail-safe keyword check: %s", e)
+        return _failsafe(text, minor_mode=minor_mode, output=False)
 
 
 async def check_output(text: str, *, minor_mode: bool = False, rating: str = "teen") -> SafetyResult:
@@ -57,8 +57,29 @@ async def check_output(text: str, *, minor_mode: bool = False, rating: str = "te
     try:
         return _coerce(await fn(text, **_kwargs(fn, minor_mode=minor_mode, rating=rating, context=None)))
     except Exception as e:  # noqa: BLE001
-        log.exception("safety.check_output failed: %s", e)
-        return SafetyResult(filtered_text=filter_chunk(text, minor_mode=minor_mode))
+        log.exception("safety.check_output failed → fail-safe keyword check: %s", e)
+        return _failsafe(text, minor_mode=minor_mode, output=True)
+
+
+def _failsafe(text: str, *, minor_mode: bool, output: bool) -> SafetyResult:
+    """安全模块自身异常时的兜底（fail-safe，不直接放行）：危机/硬拦截关键词 → 拦截；其余经 filter_chunk 遮蔽。
+    关键词库也不可用时：输入拦截（请用户重试），输出替换为安全提示。"""
+    try:
+        from app.safety import keywords as kw
+
+        if not output and kw.crisis_match(text):
+            return SafetyResult(allowed=False, blocked=True, crisis=True, categories=["crisis"], message=crisis_message())
+        hard = kw.hard_hits(text) if hasattr(kw, "hard_hits") else kw.find(text, kw.HARD_BLOCK)
+        if hard:
+            return SafetyResult(allowed=False, blocked=True, categories=sorted(hard), rating="mature",
+                                message="内容未通过安全审核，已被拦截。",
+                                filtered_text=SAFE_NOTICE if output else None)
+        masked = filter_chunk(text, minor_mode=minor_mode)
+        return SafetyResult(categories=["safety_degraded"], filtered_text=masked)
+    except Exception:  # noqa: BLE001
+        log.exception("fail-safe keyword check failed too")
+        return SafetyResult(allowed=False, blocked=True, categories=["safety_unavailable"],
+                            message="安全审核暂时不可用，请稍后重试。", filtered_text=SAFE_NOTICE if output else None)
 
 
 def filter_chunk(text: str, *, minor_mode: bool = False) -> str:
