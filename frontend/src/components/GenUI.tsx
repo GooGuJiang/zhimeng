@@ -169,15 +169,18 @@ export function GenUI({
   streaming,
   source,
   exclude = [],
+  skipAreas = [],
 }: {
   components: UIComponent[];
   handlers: GenUIHandlers;
   streaming?: boolean;
   source: "ai" | "local";
   exclude?: string[];
+  /** v1.2: skip components whose layout.area has a dedicated region (e.g. "bottom"). */
+  skipAreas?: UIComponent["layout"]["area"][];
 }) {
   const sorted = [...components]
-    .filter((c) => !exclude.includes(c.type))
+    .filter((c) => !exclude.includes(c.type) && !skipAreas.includes(c.layout?.area))
     .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
   return (
     <div className="genui stack" data-testid="genui" data-source={source}>

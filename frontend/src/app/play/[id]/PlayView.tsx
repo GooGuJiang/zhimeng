@@ -476,6 +476,9 @@ export function PlayView({ id }: { id: string }) {
             handlers={handlers}
             streaming={p.busy}
             source={p.uiSource}
+            // v1.2: event_feed / choice_list are area:"bottom" — mirrored by the 场外大事件 panel and the
+            // option buttons, so the side panel skips that area (type list kept for older servers).
+            skipAreas={["bottom"]}
             exclude={["event_feed", "choice_list"]}
           />
           <OffscreenPanel world={world} events={p.events} />
