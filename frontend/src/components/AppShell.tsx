@@ -1,11 +1,14 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { BookOpen, Brain, Eye, Feather, Archive, Settings, Sparkles, Moon, Sun } from "lucide-react";
 import { useApplyPrefs, usePrefs } from "@/hooks/usePrefs";
 import { useCurrentWorld } from "@/hooks/useCurrentWorld";
 import { ToastProvider } from "./Toast";
+import { UserMenu } from "./UserMenu";
+import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { isAuthPage, isPublicPath, loginHref } from "@/lib/auth";
 import { api } from "@/lib/api";
 
 export function BrandMark({ className = "brand-mark" }: { className?: string }) {
@@ -141,13 +144,63 @@ function ThemeToggle() {
   );
 }
 
+/**
+ * Route-level guard. Sends the visitor to /login?next=<here> when the server requires a login (auth_required)
+ * and this is not a public page (/, /login, /register), or when the session was lost / an action was refused
+ * with 401 (any page). Demo mode (auth_required=false) never forces a login for browsing.
+ */
+function AuthGate() {
+  const { status, authRequired, lost } = useAuth();
+  const path = usePathname() ?? "/";
+  const router = useRouter();
+  useEffect(() => {
+    if (status !== "anon" || isAuthPage(path)) return;
+    if (!lost && !(authRequired && !isPublicPath(path))) return;
+    router.replace(loginHref(path + window.location.search));
+  }, [status, authRequired, lost, path, router]);
+  return null;
+}
+
+function DemoBanner() {
+  const { status, authRequired, actingAs } = useAuth();
+  const path = usePathname() ?? "/";
+  const [hidden, setHidden] = useState(false);
+  if (status !== "anon" || authRequired || !actingAs || hidden || isAuthPage(path)) return null;
+  return (
+    <div className="demo-banner" role="status" data-testid="demo-banner">
+      <span>
+        当前为演示账号「{actingAs.nickname}」，作品会和其他未登录的访客共用。
+        <Link href={loginHref(path)}>登录</Link> 或 <Link href={`/register?next=${encodeURIComponent(path)}`}>注册</Link>{" "}
+        后保存到自己的账号。
+      </span>
+      <button type="button" className="icon-btn" aria-label="关闭提示" onClick={() => setHidden(true)} data-testid="demo-banner-close">
+        ×
+      </button>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
+  return (
+    <ToastProvider>
+      <AuthProvider>
+        <Shell>{children}</Shell>
+      </AuthProvider>
+    </ToastProvider>
+  );
+}
+
+function Shell({ children }: { children: ReactNode }) {
   useApplyPrefs();
   const path = usePathname() ?? "/";
   const [worldId] = useCurrentWorld();
+  const { user } = useAuth();
+  // account preference: hide 上帝视角 from the navigation (the page itself stays reachable)
+  const nav = NAV.filter((n) => n.key !== "god" || user?.preferences?.show_god_view !== false);
   return (
-    <ToastProvider>
+    <>
       <ThreadsBg />
+      <AuthGate />
       <div className="shell">
         <header className="topbar">
           <Link href="/" className="brand" aria-label="织梦 首页">
@@ -156,19 +209,21 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
           {worldId ? <WorldChip id={worldId} /> : null}
           <nav className="nav" aria-label="主导航">
-            {NAV.map((n) => (
+            {nav.map((n) => (
               <Link key={n.key} href={n.href(worldId)} className={n.match(path) ? "on" : undefined}>
                 {n.label}
               </Link>
             ))}
           </nav>
           <ThemeToggle />
+          <UserMenu />
         </header>
+        <DemoBanner />
         <main className="page page-enter" key={path.split("/")[1] || "home"}>
           {children}
         </main>
         <nav className="tabbar" aria-label="底部导航">
-          {NAV.filter((n) => TAB_KEYS.includes(n.key)).map((n) => (
+          {nav.filter((n) => TAB_KEYS.includes(n.key)).map((n) => (
             <Link key={n.key} href={n.href(worldId)} className={n.match(path) ? "on" : undefined}>
               <n.icon aria-hidden />
               {n.label === "上帝视角" ? "上帝" : n.label}
@@ -176,6 +231,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
       </div>
-    </ToastProvider>
+    </>
   );
 }

@@ -7,6 +7,8 @@ export interface Prefs {
   minorMode: boolean;
   reducedMotion: "system" | "on" | "off";
   autoVoice: boolean;
+  /** account preference tts_enabled (mirrored on sign-in): false hides 配音 players */
+  ttsEnabled: boolean;
   fontScale: number;
   /** colour theme; light ("宣纸") is the default */
   theme: "light" | "dark" | "system";
@@ -15,6 +17,7 @@ export const defaultPrefs: Prefs = {
   minorMode: false,
   reducedMotion: "system",
   autoVoice: false,
+  ttsEnabled: true,
   fontScale: 1,
   theme: "light",
 };
@@ -52,6 +55,17 @@ export const store = {
       undefined,
     ),
 };
+
+/** Per-account local state that must not leak to the next person on this browser (called on logout). */
+export function clearAccountLocalState() {
+  safe(() => {
+    localStorage.removeItem(KEY_WORLD);
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k?.startsWith("zhimeng.pending.")) localStorage.removeItem(k);
+    }
+  }, undefined);
+}
 
 export const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto

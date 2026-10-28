@@ -25,6 +25,13 @@ function subscribe(fn: () => void) {
   };
 }
 
+/** Update local prefs from outside React (e.g. account preferences synced on sign-in). */
+export function patchLocalPrefs(patch: Partial<Prefs>) {
+  cache = { ...read(), ...patch };
+  store.setPrefs(cache);
+  listeners.forEach((l) => l());
+}
+
 export function usePrefs(): [Prefs, (patch: Partial<Prefs>) => void] {
   const prefs = useSyncExternalStore(subscribe, read, () => defaultPrefs);
   const update = useCallback((patch: Partial<Prefs>) => {
