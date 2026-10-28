@@ -1,9 +1,11 @@
 "use client";
+import Link from "next/link";
 /** 设置与安全 (F9): minor mode, rating, motion / font prefs, safety policy, reports, service status. */
 import { useEffect, useState } from "react";
 import { Flag, ShieldCheck } from "lucide-react";
 import { api, errorText } from "@/lib/api";
 import type { Rating, World } from "@/lib/types";
+import { useAuth } from "@/hooks/useAuth";
 import { usePrefs } from "@/hooks/usePrefs";
 import { useCurrentWorld } from "@/hooks/useCurrentWorld";
 import { ReportDialog } from "@/components/ReportDialog";
@@ -61,11 +63,25 @@ export function SettingsView() {
         .catch(() => setWorld(null));
   }, [worldId]);
 
+  const { user } = useAuth();
+  // v1.4: the account's minor mode is a floor for every world (turning it off happens in 个人中心 with a password)
+  const accountMinor = !!user?.preferences?.minor_mode;
+  const [clamped, setClamped] = useState<string | null>(null);
   const patch = async (body: { minor_mode?: boolean; rating?: Rating }) => {
     if (!world) return;
     try {
-      setWorld(await api.patchSettings(world.id, body));
-      toast("当前世界的安全设置已更新");
+      const r = await api.patchSettingsClamped(world.id, body);
+      setWorld(r.world); // always echo what the server actually applied
+      if (r.clamped.length) {
+        const why = r.clamped.includes("minor_mode")
+          ? "账号已开启未成年人模式，此世界不能关闭未成年人模式"
+          : "账号已开启未成年人模式，内容分级不能高于上限";
+        setClamped(`已按账号的未成年人模式设置：${why}。如需调整，请到个人中心的偏好设置。`);
+        toast("已按账号的未成年人模式设置");
+      } else {
+        setClamped(null);
+        toast("当前世界的安全设置已更新");
+      }
     } catch (e) {
       toast(`更新失败：${errorText(e)}`);
     }
@@ -89,11 +105,18 @@ export function SettingsView() {
                 <input
                   type="checkbox"
                   data-testid="minor-mode-toggle"
-                  checked={prefs.minorMode}
+                  checked={prefs.minorMode || accountMinor}
+                  disabled={accountMinor}
                   onChange={(e) => setPrefs({ minorMode: e.target.checked })}
                 />
                 新建世界默认开启未成年人模式
               </label>
+              {accountMinor ? (
+                <p className="faint" style={{ margin: 0, fontSize: 13 }} data-testid="account-minor-note">
+                  账号已开启未成年人模式，所有世界都只生成全年龄内容。关闭需要在
+                  <Link href="/me?tab=prefs">个人中心 · 偏好设置</Link>中输入账号密码。
+                </p>
+              ) : null}
               {world ? (
                 <>
                   <hr className="zu-divider" />
@@ -104,10 +127,17 @@ export function SettingsView() {
                     <input
                       type="checkbox"
                       checked={world.minor_mode}
+                      disabled={accountMinor && world.minor_mode}
+                      data-testid="world-minor-toggle"
                       onChange={(e) => void patch({ minor_mode: e.target.checked })}
                     />
                     此世界启用未成年人模式
                   </label>
+                  {clamped ? (
+                    <div className="notice info" role="status" data-testid="settings-clamped">
+                      {clamped}
+                    </div>
+                  ) : null}
                   <div className="rating-list" role="radiogroup" aria-label="内容分级">
                     {RATINGS.map((r) => (
                       <button

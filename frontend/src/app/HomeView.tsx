@@ -14,6 +14,18 @@ import { GenerationProgress } from "@/components/GenerationProgress";
 import { SafetyNotice } from "@/components/SafetyNotice";
 import { ImportSave } from "@/components/ImportSave";
 import { SHOW_AI_LABEL } from "@/components/AiLabel";
+import { useAuth } from "@/hooks/useAuth";
+import { loginHref } from "@/lib/auth";
+
+/** What the visitor typed before being sent to log in (restored when they come back). */
+const DRAFT_KEY = "zhimeng.homeDraft";
+type HomeDraft = {
+  prompt: string;
+  genre: string | null;
+  tone: string | null;
+  length: GenerateWorldRequest["length"];
+  file: { name: string; text: string } | null;
+};
 
 const SEEDS = [
   "一个民国上海滩的侦探故事，我是报社记者",
@@ -41,18 +53,54 @@ export function HomeView() {
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
   const [recent, setRecent] = useState<WorldSummary[]>([]);
   const [opening, setOpening] = useState(false);
+  const { status, user, authRequired } = useAuth();
+  const mustLogin = status === "anon" && authRequired;
 
+  // recent worlds only exist for a session (or the demo account when the server allows anonymous use)
   useEffect(() => {
+    if (status === "loading" || mustLogin) return;
+    let live = true;
     api
       .listWorlds()
-      .then((ws) => setRecent(ws.slice(0, 6)))
-      .catch(() => setRecent([]));
+      .then((ws) => live && setRecent(ws.slice(0, 6)))
+      .catch(() => live && setRecent([]));
+    return () => {
+      live = false;
+    };
+  }, [status, mustLogin, user?.id]);
+
+  // came back from /login: restore the draft (async so it is not a synchronous setState in the effect)
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(DRAFT_KEY);
+      sessionStorage.removeItem(DRAFT_KEY);
+    } catch {}
+    if (!raw) return;
+    void Promise.resolve().then(() => {
+      try {
+        const d = JSON.parse(raw!) as HomeDraft;
+        setPrompt(d.prompt ?? "");
+        setGenre(d.genre ?? null);
+        setTone(d.tone ?? null);
+        if (d.length) setLength(d.length);
+        setFile(d.file ?? null);
+      } catch {}
+    });
   }, []);
 
   const canGo = (prompt.trim().length > 0 || !!file) && !gen.running && !opening;
 
   const go = async () => {
     if (!canGo) return;
+    if (mustLogin) {
+      // creating a world needs an account: keep what was typed, log in, come back here
+      try {
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ prompt, genre, tone, length, file } satisfies HomeDraft));
+      } catch {}
+      router.push(loginHref("/"));
+      return;
+    }
     const body: GenerateWorldRequest = {
       prompt: prompt.trim() || `根据上传的文本《${file?.name}》生成世界`,
       genre: genre ?? undefined,
@@ -62,7 +110,8 @@ export function HomeView() {
       mode: "story",
       source_text: file?.text ?? null,
       minor_mode: prefs.minorMode,
-      rating: prefs.minorMode ? "all" : "teen",
+      // the account preference is the default rating; minor mode always means 全年龄 here
+      rating: prefs.minorMode ? "all" : (user?.preferences?.rating ?? "teen"),
     };
     const t0 = Date.now();
     const { world, worldId } = await gen.run(streamPath.generate, body);
@@ -235,6 +284,11 @@ export function HomeView() {
                   : gen
               }
             />
+          ) : null}
+          {mustLogin ? (
+            <p className="notice info" style={{ margin: "12px 0 0", fontSize: 13 }} data-testid="home-login-hint">
+              编织世界需要先登录。点击「造化」会先带你去登录，已填写的内容会保留。
+            </p>
           ) : null}
           <p className="faint" style={{ fontSize: 12, margin: "12px 0 0" }}>
             {SHOW_AI_LABEL ? "生成内容由 AI 创作并经双向安全审核；" : ""}未成年人模式下仅生成全年龄内容。

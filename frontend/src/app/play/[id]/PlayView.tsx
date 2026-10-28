@@ -133,7 +133,7 @@ export function PlayView({ id }: { id: string }) {
     return (
       <>
         {img ? <Illustration asset={img} onReplace={replaceAsset} /> : null}
-        {aud ? (
+        {aud && prefs.ttsEnabled !== false ? (
           <AudioBar asset={aud} autoPlay={autoPlay && prefs.autoVoice} onReplace={replaceAsset} />
         ) : null}
       </>

@@ -9,6 +9,7 @@ import { worldCache } from "@/lib/cache";
 import { GenerationProgress } from "@/components/GenerationProgress";
 import { SafetyNotice } from "@/components/SafetyNotice";
 import { usePrefs } from "@/hooks/usePrefs";
+import { useAuth } from "@/hooks/useAuth";
 import { SHOW_AI_LABEL } from "@/components/AiLabel";
 
 const SUBJECTS = ["语文", "历史", "地理", "非遗", "科学", "思政"];
@@ -37,8 +38,13 @@ export function EducationView() {
   const [prefs] = usePrefs();
   const [text, setText] = useState("");
   const [title, setTitle] = useState("");
-  const [subject, setSubject] = useState("语文");
-  const [grade, setGrade] = useState("初中");
+  const { user } = useAuth();
+  // account preferences give the defaults (§8: education.grade / subject)
+  const [subject, setSubject] = useState(user?.preferences?.education?.subject || "语文");
+  const [grade, setGrade] = useState(user?.preferences?.education?.grade || "初中");
+  const grades = GRADES.includes(grade) ? GRADES : [grade, ...GRADES];
+  const [prefSubject] = useState(subject);
+  const subjects = SUBJECTS.includes(prefSubject) ? SUBJECTS : [prefSubject, ...SUBJECTS];
 
   const go = async () => {
     if (!text.trim() || gen.running) return;
@@ -116,7 +122,7 @@ export function EducationView() {
             <label className="field">
               <span>学段</span>
               <select className="select" value={grade} onChange={(e) => setGrade(e.target.value)}>
-                {GRADES.map((g) => (
+                {grades.map((g) => (
                   <option key={g}>{g}</option>
                 ))}
               </select>
@@ -125,7 +131,7 @@ export function EducationView() {
           <div className="opt-group">
             <span className="opt-label">学科</span>
             <div className="chips">
-              {SUBJECTS.map((s) => (
+              {subjects.map((s) => (
                 <button
                   key={s}
                   type="button"
