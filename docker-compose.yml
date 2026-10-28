@@ -24,6 +24,11 @@ services:
       ZM_JWT_SECRET: ${ZM_JWT_SECRET:-}              # 留空则自动生成写入 /data/jwt_secret
       # 只采信这些网段转发来的 X-Forwarded-For（前端容器在 compose 私网里）；后端端口不要对公网开放
       ZM_TRUSTED_PROXIES: ${ZM_TRUSTED_PROXIES:-127.0.0.1/32,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      ZM_PROXY_HOPS: ${ZM_PROXY_HOPS:-1}              # 只取 XFF 从右数第 N 项（前端容器这一跳 = 1）
+      ZM_LOGIN_ACCOUNT_MAX_FAILS: ${ZM_LOGIN_ACCOUNT_MAX_FAILS:-10}   # 按账号失败上限（与 IP 无关）
+      ZM_LOGIN_ACCOUNT_WINDOW_MIN: ${ZM_LOGIN_ACCOUNT_WINDOW_MIN:-15}
+      ZM_LOGIN_ACCOUNT_LOCK_MIN: ${ZM_LOGIN_ACCOUNT_LOCK_MIN:-15}
+      ZM_REGISTER_GLOBAL_PER_HOUR: ${ZM_REGISTER_GLOBAL_PER_HOUR:-200}
       ZM_COOKIE_SECURE: ${ZM_COOKIE_SECURE:-0}       # 走 https 时设 1
       # 写接口校验 Origin：浏览器访问前端用的地址必须在白名单内（换端口/域名/IP 访问时在 .env 设 ZM_CORS_ORIGINS）
       ZM_CORS_ORIGINS: ${ZM_CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}

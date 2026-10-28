@@ -648,3 +648,147 @@ def test_demo_account_login_sees_demo_worlds(client):
         assert w.get("owner_id") == "u_demo"
     ro = demo.patch("/api/users/me", {"nickname": "改名"})
     assert ro.status_code == 403 and code(ro) == "demo_readonly", ro.text[:200]
+
+
+# ======================= AUTH-QA-3：伪造 XFF / 代理不传 XFF 的兜底（契约 §5、§13） =======================
+# 进程内客户端对端为 127.0.0.1（默认可信代理）。阈值用环境变量临时调小，用例结束恢复（get_settings 缓存同步清理），
+# 每个用例用独立账号与 198.18.0.0/15 来源 IP，互不影响。
+@pytest.fixture
+def tune(monkeypatch):
+    if LIVE:
+        pytest.skip("需在进程内调整阈值（环境变量 + get_settings.cache_clear）")
+    from app.config import get_settings
+
+    def _set(**env):
+        for k, v in env.items():
+            monkeypatch.setenv(k, str(v))
+        get_settings.cache_clear()
+    yield _set
+    monkeypatch.undo()
+    get_settings.cache_clear()
+
+
+def _assert_locked(r, what=""):
+    assert r.status_code == 429 and code(r) == "rate_limited", f"{what}: {r.status_code} {r.text[:200]}"
+    ra = r.headers.get("retry-after")
+    assert ra and ra.isdigit() and int(ra) > 0, f"{what}: Retry-After={ra}"
+    assert int(r.json().get("retry_after", 0)) > 0, f"{what}: {r.text[:200]}"
+
+
+def test_account_lock_default_10_with_rotating_forged_xff(client):
+    """默认 ZM_LOGIN_ACCOUNT_MAX_FAILS=10：每次换一个伪造来源 IP 也绕不过按账号上限；锁定期间正确密码也 429。"""
+    _, name = register_user(client, unique_name("acct"))
+    codes = [login_user(client, name, f"Guess{i}abc9", ip=unique_ip()).status_code for i in range(10)]
+    assert codes == [401] * 10, codes
+    _assert_locked(login_user(client, name, ip=unique_ip()), "第 11 次（正确密码、新 IP）")
+    other, _ = register_user(client, unique_name("acctok"))
+    assert other.status_code == 201
+    assert login_user(client, other.json()["user"]["username"], ip=unique_ip()).status_code == 200, "别的账号不受影响"
+
+
+def test_account_lock_success_does_not_reset(client, tune):
+    tune(ZM_LOGIN_ACCOUNT_MAX_FAILS=4)
+    _, name = register_user(client, unique_name("noreset"))
+    for _ in range(3):
+        assert login_user(client, name, "Wrong-pass-999", ip=unique_ip()).status_code == 401
+    assert login_user(client, name, ip=unique_ip()).status_code == 200
+    assert login_user(client, name, "Wrong-pass-999", ip=unique_ip()).status_code == 401
+    _assert_locked(login_user(client, name, ip=unique_ip()), "登录成功不清零：第 4 次失败后应锁")
+
+
+def test_account_lock_merges_username_and_email(client, tune):
+    tune(ZM_LOGIN_ACCOUNT_MAX_FAILS=4)
+    email = f"m{uuid.uuid4().hex[:6]}@example.com"
+    _, name = register_user(client, unique_name("merge"), email=email)
+    for login in (name, name.upper(), email, email.upper()):
+        assert login_user(client, login, "Wrong-pass-999", ip=unique_ip()).status_code == 401
+    _assert_locked(login_user(client, name, ip=unique_ip()), "用户名登录")
+    _assert_locked(login_user(client, email, ip=unique_ip()), "邮箱登录")
+
+
+def test_unknown_username_same_response_and_counted(client, tune):
+    tune(ZM_LOGIN_ACCOUNT_MAX_FAILS=3)
+    _, real = register_user(client, unique_name("real"))
+    ghost = unique_name("ghost")
+    pairs = [(login_user(client, real, "Wrong-pass-999", ip=unique_ip()),
+              login_user(client, ghost, "Wrong-pass-999", ip=unique_ip())) for _ in range(3)]
+    for a, b in pairs:
+        assert (a.status_code, code(a), a.json().get("detail")) == (b.status_code, code(b), b.json().get("detail"))
+    la, lb = login_user(client, real, ip=unique_ip()), login_user(client, ghost, ip=unique_ip())
+    _assert_locked(la, "存在的账号")
+    _assert_locked(lb, "不存在的账号（也计数）")
+    assert set(la.json()) == set(lb.json()) and la.headers.get("retry-after") and lb.headers.get("retry-after")
+    assert abs(int(la.json()["retry_after"]) - int(lb.json()["retry_after"])) <= 5, "锁定提示不应暴露账号是否存在"
+
+
+def test_proxy_hops_default_rightmost_only(client):
+    """ZM_PROXY_HOPS=1：只取 XFF 最右项；左边（客户端可伪造）的条目怎么变都不影响按 IP+账号计数。"""
+    _, name = register_user(client, unique_name("hop1"))
+    ip = unique_ip()
+    for i in range(5):
+        r = client.post("/api/auth/login", json={"login": name, "password": "Wrong-pass-999"},
+                        headers={"X-Forwarded-For": f"203.0.113.{i + 1}, {ip}"})
+        assert r.status_code == 401
+    r = client.post("/api/auth/login", json={"login": name, "password": AUTH_PASSWORD},
+                    headers={"X-Forwarded-For": f"203.0.113.99, {ip}"})
+    _assert_locked(r, "最右项相同 → 同一 IP，第 6 次应被 IP+账号规则锁")
+    ok = client.post("/api/auth/login", json={"login": name, "password": AUTH_PASSWORD},
+                     headers={"X-Forwarded-For": f"{ip}, {unique_ip()}"})
+    assert ok.status_code == 200, "最右项不同 = 不同客户端（左边写同一 IP 也不算）"
+
+
+def test_proxy_hops_2(client, tune):
+    tune(ZM_PROXY_HOPS=2)
+    _, name = register_user(client, unique_name("hop2"), ip=unique_ip())
+    ip = unique_ip()
+    for i in range(5):  # 客户端真实 IP 在从右数第 2 项，最右是内层代理（每次变化也不影响）
+        assert client.post("/api/auth/login", json={"login": name, "password": "Wrong-pass-999"},
+                           headers={"X-Forwarded-For": f"203.0.113.7, {ip}, 10.9.0.{i + 1}"}).status_code == 401
+    r = client.post("/api/auth/login", json={"login": name, "password": AUTH_PASSWORD},
+                    headers={"X-Forwarded-For": f"{ip}, 10.9.0.50"})
+    _assert_locked(r, "HOPS=2 取从右数第 2 项")
+    # 条目少于 hops → IP 未知：按 IP 的规则不生效（同一单项 XFF 连续失败 6 次也不被 IP+账号锁）
+    _, n2 = register_user(client, unique_name("hop2u"), ip=unique_ip())
+    single = unique_ip()
+    codes = [client.post("/api/auth/login", json={"login": n2, "password": "Wrong-pass-999"},
+                         headers={"X-Forwarded-For": single}).status_code for _ in range(6)]
+    assert codes == [401] * 6, codes
+    assert client.post("/api/auth/login", json={"login": n2, "password": AUTH_PASSWORD},
+                       headers={"X-Forwarded-For": single}).status_code == 200
+
+
+def _login_no_xff(client, login, pw=AUTH_PASSWORD):
+    client.cookies.clear()
+    return client.post("/api/auth/login", json={"login": login, "password": pw})
+
+
+def test_unknown_ip_does_not_lock_everyone(client, tune):
+    """代理没传 XFF（可信对端、无 XFF/X-Real-IP）= IP 未知：一个账号被锁、全站累计 20+ 次失败，都不影响其他账号。"""
+    tune(ZM_LOGIN_ACCOUNT_MAX_FAILS=4)
+    users = [register_user(client, unique_name("unk"))[1] for _ in range(7)]
+    victim, bystander = users[0], users[-1]
+    for _ in range(4):
+        assert _login_no_xff(client, victim, "Wrong-pass-999").status_code == 401
+    _assert_locked(_login_no_xff(client, victim), "被按账号锁定")
+    for u in users[1:6]:  # 5 个账号各失败 3 次 + 上面 4 次 = 19；再补 2 次 → 全站无 XFF 累计 21 次失败
+        for _ in range(3):
+            assert _login_no_xff(client, u, "Wrong-pass-999").status_code == 401
+    for _ in range(2):
+        assert _login_no_xff(client, users[1], "Wrong-pass-999").status_code in (401, 429)
+    assert _login_no_xff(client, bystander).status_code == 200, "IP 未知时不应因他人失败而全站误锁"
+
+
+def test_unknown_ip_register_not_per_ip_limited(client):
+    client.cookies.clear()
+    codes = [client.post("/api/auth/register", json={"username": unique_name("noxff"), "password": AUTH_PASSWORD,
+                                                      "nickname": "无XFF"}).status_code for _ in range(11)]
+    assert codes == [201] * 11, f"IP 未知时不应套用每 IP 10 次/小时：{codes}"
+
+
+def test_global_register_cap(client, tune):
+    tune(ZM_REGISTER_GLOBAL_PER_HOUR=1)  # 本进程本小时早已注册多次 → 立刻触发全站上限
+    r, _ = register_user(client, unique_name("cap"))
+    _assert_locked(r, "全站注册上限（带 XFF）")
+    client.cookies.clear()
+    r2 = client.post("/api/auth/register", json={"username": unique_name("cap2"), "password": AUTH_PASSWORD, "nickname": "x"})
+    _assert_locked(r2, "全站注册上限（IP 未知也生效）")

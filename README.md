@@ -188,9 +188,12 @@ pnpm dev            # http://localhost:3000
 | `ZM_ACCESS_TTL_MIN` / `ZM_REFRESH_TTL_DAYS` | `30` / `30` | access / refresh 会话有效期 |
 | `ZM_COOKIE_SECURE` | `0` | `1` = cookie 带 Secure（仅 https）；本地 http 保持 0 |
 | `ZM_CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | 来源白名单：CORS（带凭据，不能用 `*`）+ 写接口 Origin 校验。用其它域名/IP/端口访问前端时必须加入 |
-| `ZM_TRUSTED_PROXIES` | 代码内 `127.0.0.1/32,::1`；compose 另加私网段 `172.16.0.0/12,10.0.0.0/8,192.168.0.0/16` | 只有请求来自这些网段（即前端 Next 代理）时才采信 `X-Forwarded-For`，从右往左取第一个不可信地址作为客户端 IP，用于登录/注册限流。已知限制见 TEAM.md AUTH-QA-3 |
+| `ZM_TRUSTED_PROXIES` | 代码内 `127.0.0.1/32,::1`；compose 另加私网段 `172.16.0.0/12,10.0.0.0/8,192.168.0.0/16` | 只有请求来自这些网段（即前端 Next 代理）时才采信 `X-Forwarded-For`，用于登录/注册限流；来自其它地址时一律按对端地址。已知限制见 TEAM.md AUTH-QA-3 |
+| `ZM_PROXY_HOPS` | `1` | 对端可信时只取 `X-Forwarded-For` **从右数第 N 项**作为客户端 IP（不再往左回溯，左边可伪造）；前面有几层可信代理就设几。条目不够或可信代理没传 XFF/`X-Real-IP` 时客户端 IP 记为「未知」：按 IP 的限流不生效，只靠按账号上限与全站注册上限，首个此类请求打一条 WARNING |
+| `ZM_LOGIN_ACCOUNT_MAX_FAILS` / `ZM_LOGIN_ACCOUNT_WINDOW_MIN` / `ZM_LOGIN_ACCOUNT_LOCK_MIN` | `10` / `15` / `15` | 按账号（与 IP 无关）的登录失败上限：同一账号窗口内失败 N 次锁定 M 分钟（429 + `Retry-After`，锁定期正确密码也 429）。用户名/邮箱登录合并计数；登录成功不清零；不存在的用户名同样计数且响应一致 |
+| `ZM_REGISTER_GLOBAL_PER_HOUR` | `200` | 全站每小时注册上限（兜底，IP 未知时也生效） |
 | `ZM_TRUST_PROXY` | `1` | `0` = 完全不采信 `X-Forwarded-For`（一律按对端地址限流） |
-| `ZM_AVATAR_MAX_BYTES` / `ZM_REGISTER_PER_HOUR` | `2097152` / `10` | 头像大小上限 / 同 IP 每小时注册上限 |
+| `ZM_AVATAR_MAX_BYTES` / `ZM_REGISTER_PER_HOUR` | `2097152` / `10` | 头像大小上限 / 同 IP 每小时注册上限（IP 未知时不适用） |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
 | `ZM_PROXY_TIMEOUT_MS` | `180000` | Next 反向代理超时（毫秒）；Next 16 默认 30s 会让长请求 socket hang up（BUG-007）；修改后需重新 build / 启动前端 |
