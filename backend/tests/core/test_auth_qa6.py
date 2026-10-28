@@ -22,3 +22,31 @@ def test_login_warns_once(caplog, monkeypatch):
         middleware.client_ip(_scope("/api/auth/login"), {})
         middleware.client_ip(_scope("/api/auth/register"), {})
     assert sum("X-Forwarded-For" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_ip_thresholds_configurable(core_env, monkeypatch):
+    """原写死的按 IP 阈值可用环境变量调整（ZM_LOGIN_IP_ACCOUNT_MAX_FAILS / ZM_LOGIN_IP_MAX_FAILS）。"""
+    from auth_helpers import PW, new_client, register, setenv
+    setenv(monkeypatch, ZM_LOGIN_IP_ACCOUNT_MAX_FAILS=2, ZM_LOGIN_ACCOUNT_MAX_FAILS=100)
+    with new_client("203.0.113.20") as c:
+        _, name = register(c)
+        c.cookies.clear()
+        for _ in range(2):
+            assert c.post("/api/auth/login", json={"login": name, "password": "Wrong#1234"}).status_code == 401
+        assert c.post("/api/auth/login", json={"login": name, "password": PW}).status_code == 429
+    setenv(monkeypatch, ZM_LOGIN_IP_ACCOUNT_MAX_FAILS=100, ZM_LOGIN_IP_MAX_FAILS=3)
+    with new_client("203.0.113.21") as c:
+        _, good = register(c)
+        c.cookies.clear()
+        for i in range(3):
+            c.post("/api/auth/login", json={"login": f"nobody{i}x", "password": "Wrong#1234"})
+        assert c.post("/api/auth/login", json={"login": good, "password": PW}).status_code == 429
+
+
+def test_settings_defaults_unchanged(core_env):
+    from app.config import get_settings
+    get_settings.cache_clear()
+    s = get_settings()
+    assert (s.zm_login_ip_account_max_fails, s.zm_login_ip_account_lock_min, s.zm_login_ip_max_fails,
+            s.zm_login_ip_lock_min, s.zm_pwd_change_max_fails, s.zm_pwd_change_lock_min,
+            s.zm_refresh_per_min, s.zm_login_window_min) == (5, 5, 20, 15, 5, 5, 60, 15)

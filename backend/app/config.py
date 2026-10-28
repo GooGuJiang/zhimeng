@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     zm_cookie_secure: bool = False
     zm_demo_password: str = ""          # 缺省随机生成并写入 $ZM_DATA_DIR/demo_password.txt（0600），绝不打印
     zm_trust_proxy: bool = True         # 兼容旧开关：0 = 完全不采信 X-Forwarded-For / X-Real-IP
-    # 可信代理网段（逗号分隔，支持 CIDR）：只有对端在其中才采信 XFF/X-Real-IP，并从右往左取第一个不可信地址。
-    # Docker 部署（前端容器经内部网络代理）建议：127.0.0.1/32,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+    # 可信代理（逗号分隔，支持 CIDR）：只有对端在其中才采信转发头——只取 X-Forwarded-For 从右数第 ZM_PROXY_HOPS 项
+    # （默认 1 = 我方代理写入的那一跳），不往左回溯；没有 XFF 时取 X-Real-IP；都没有 → 客户端 IP 未知（按 IP 的限流不生效）。
+    # 不在其中的对端一律按 TCP 对端地址，客户端自带的转发头忽略。Docker：compose 默认只信任回环 + 前端容器固定 IP（ZM_FRONTEND_IP）。
     zm_trusted_proxies: str = "127.0.0.1/32,::1"
     zm_avatar_max_bytes: int = 2 * 1024 * 1024
     zm_register_per_hour: int = 10      # 同 IP 每小时注册上限（客户端 IP 未知时不生效）
@@ -44,6 +45,15 @@ class Settings(BaseSettings):
     zm_login_account_max_fails: int = 10
     zm_login_account_window_min: int = 15
     zm_login_account_lock_min: int = 15
+    # 其余限流阈值（默认值即原写死的值；窗口均为 ZM_LOGIN_WINDOW_MIN）
+    zm_login_window_min: int = 15            # 下面两条按 IP 规则与改密码规则的计数窗口
+    zm_login_ip_account_max_fails: int = 5   # 同 IP + 同账号：失败 N 次 → 锁
+    zm_login_ip_account_lock_min: int = 5
+    zm_login_ip_max_fails: int = 20          # 同 IP：失败 N 次 → 锁
+    zm_login_ip_lock_min: int = 15
+    zm_pwd_change_max_fails: int = 5         # 改密码时旧密码输错 N 次 → 锁
+    zm_pwd_change_lock_min: int = 5
+    zm_refresh_per_min: int = 60             # 每 IP 每分钟 refresh 上限
     # 可信代理时取 XFF 从右数第 N 项（N = 我方可信代理的层数；默认 1 = 只取最右边那一跳）
     zm_proxy_hops: int = 1
     # 实时回合延迟预算（首字 ≤2s 目标）：叙事前的世界/角色 Agent 与记忆向量检索超时即用本地规则，不拖慢旁白

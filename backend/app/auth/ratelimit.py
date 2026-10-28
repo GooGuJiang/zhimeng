@@ -78,6 +78,10 @@ def login_key(ip: str, login: str) -> str:
     return f"{ip}|{login.strip().lower()}"
 
 
+def _window() -> timedelta:
+    return timedelta(minutes=max(1, get_settings().zm_login_window_min))
+
+
 def _acct_left(acct: str) -> float:
     s = get_settings()
     times = _events("login_fail_acct", key=acct, since=_now() - timedelta(minutes=max(1, s.zm_login_account_window_min)))
@@ -87,9 +91,13 @@ def _acct_left(acct: str) -> float:
 def check_login(ip: str | None, login: str, acct: str) -> None:
     left = _acct_left(acct)
     if ip is not None:
-        since = _now() - WINDOW
-        left = max(left, _lock_left(_events("login_fail", key=login_key(ip, login), since=since), 5, timedelta(minutes=5)),
-                   _lock_left(_events("login_fail", ip=ip, since=since), 20, timedelta(minutes=15)))
+        s = get_settings()
+        since = _now() - _window()
+        left = max(left,
+                   _lock_left(_events("login_fail", key=login_key(ip, login), since=since),
+                              max(1, s.zm_login_ip_account_max_fails), timedelta(minutes=max(1, s.zm_login_ip_account_lock_min))),
+                   _lock_left(_events("login_fail", ip=ip, since=since),
+                              max(1, s.zm_login_ip_max_fails), timedelta(minutes=max(1, s.zm_login_ip_lock_min))))
     if left > 0:
         raise _limited(left)
 
@@ -106,7 +114,9 @@ def login_ok(ip: str | None, login: str) -> None:
 
 
 def check_password_change(user_id: str) -> None:
-    left = _lock_left(_events("pwd_fail", key=user_id, since=_now() - WINDOW), 5, timedelta(minutes=5))
+    s = get_settings()
+    left = _lock_left(_events("pwd_fail", key=user_id, since=_now() - _window()),
+                      max(1, s.zm_pwd_change_max_fails), timedelta(minutes=max(1, s.zm_pwd_change_lock_min)))
     if left > 0:
         raise _limited(left)
 
@@ -139,5 +149,5 @@ def check_register(ip: str | None) -> None:
 def hit_refresh(ip: str | None) -> None:
     if ip is None:
         return
-    check_window("refresh", ip, 60, 60, "请求太频繁")
+    check_window("refresh", ip, max(1, get_settings().zm_refresh_per_min), 60, "请求太频繁")
     record("refresh", ip, ip)

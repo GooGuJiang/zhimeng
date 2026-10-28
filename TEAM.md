@@ -365,7 +365,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 所有 detail 都是给用户看的中文（前端 `friendlyMessage` 对 4xx 直接显示 detail）。
 
 ### 10. 新增环境变量
-`ZM_AUTH_REQUIRED`（默认 0）· `ZM_JWT_SECRET`（缺省时自动生成并保存到 `$ZM_DATA_DIR/jwt_secret`）· `ZM_ACCESS_TTL_MIN`（30）· `ZM_REFRESH_TTL_DAYS`（30）· `ZM_COOKIE_SECURE`（0）· `ZM_DEMO_PASSWORD`（缺省时随机生成并写入 `$ZM_DATA_DIR/demo_password.txt`）· `ZM_TRUSTED_PROXIES`（`127.0.0.1/32,::1`）· `ZM_TRUST_PROXY`（1；0 = 完全不采信 XFF）· `ZM_REGISTER_PER_HOUR`（10） · `ZM_PROXY_HOPS`（1）· `ZM_LOGIN_ACCOUNT_MAX_FAILS`（10）· `ZM_LOGIN_ACCOUNT_WINDOW_MIN`（15）· `ZM_LOGIN_ACCOUNT_LOCK_MIN`（15）· `ZM_REGISTER_GLOBAL_PER_HOUR`（200）· `ZM_CORS_ORIGINS`（覆盖 CORS / Origin 白名单）· `ZM_AVATAR_MAX_BYTES`（2097152）。
+`ZM_AUTH_REQUIRED`（默认 0）· `ZM_JWT_SECRET`（缺省时自动生成并保存到 `$ZM_DATA_DIR/jwt_secret`）· `ZM_ACCESS_TTL_MIN`（30）· `ZM_REFRESH_TTL_DAYS`（30）· `ZM_COOKIE_SECURE`（0）· `ZM_DEMO_PASSWORD`（缺省时随机生成并写入 `$ZM_DATA_DIR/demo_password.txt`）· `ZM_TRUSTED_PROXIES`（`127.0.0.1/32,::1`）· `ZM_TRUST_PROXY`（1；0 = 完全不采信 XFF）· `ZM_REGISTER_PER_HOUR`（10） · `ZM_PROXY_HOPS`（1）· `ZM_LOGIN_ACCOUNT_MAX_FAILS`（10）· `ZM_LOGIN_ACCOUNT_WINDOW_MIN`（15）· `ZM_LOGIN_ACCOUNT_LOCK_MIN`（15）· `ZM_REGISTER_GLOBAL_PER_HOUR`（200）· `ZM_LOGIN_WINDOW_MIN`（15）· `ZM_LOGIN_IP_ACCOUNT_MAX_FAILS`（5）· `ZM_LOGIN_IP_ACCOUNT_LOCK_MIN`（5）· `ZM_LOGIN_IP_MAX_FAILS`（20）· `ZM_LOGIN_IP_LOCK_MIN`（15）· `ZM_PWD_CHANGE_MAX_FAILS`（5）· `ZM_PWD_CHANGE_LOCK_MIN`（5）· `ZM_REFRESH_PER_MIN`（60）· `ZM_CORS_ORIGINS`（覆盖 CORS / Origin 白名单）· `ZM_AVATAR_MAX_BYTES`（2097152）。
 
 ### 11. 前端对接清单（织梦-前端）
 0. draft2 改动：`register` / `login` 返回 `{user}`，需要取 `.user`；`logout` 和改密码返回 204；未登录时 `/auth/me` 返回 401，但 401 的 body 里有 `auth_required` 和 `acting_as`。
@@ -510,3 +510,5 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 
 > 织梦-后端（2026-10-28 18:30）AUTH-QA-3 收尾（原 69884a5 丢失，QA 在 33c1d39 按描述重做，已核对 compose 与原版一致）：compose 只信任 `127.0.0.1/32,::1,<前端容器固定IP>/32`（固定子网 `ZM_NET_SUBNET=172.30.53.0/24`，前端 `ZM_FRONTEND_IP=172.30.53.10`），前端透传 `ZM_TRUST_PROXY=${ZM_FRONTEND_TRUST_PROXY:-0}`；按账号失败上限见 43c73a7。
 > AUTH-QA-6 FIXED：「可信代理无 XFF」告警只在 `/api/auth/login|register|refresh` 上触发（每进程一次），健康检查不再误报；用例 `backend/tests/core/test_auth_qa6.py`。
+
+> 织梦-后端（2026-10-28 18:40）按 QA 建议把 ratelimit.py 原写死阈值改为可配置（默认值不变）：`ZM_LOGIN_WINDOW_MIN`（15）、`ZM_LOGIN_IP_ACCOUNT_MAX_FAILS`（5）/`ZM_LOGIN_IP_ACCOUNT_LOCK_MIN`（5）、`ZM_LOGIN_IP_MAX_FAILS`（20）/`ZM_LOGIN_IP_LOCK_MIN`（15）、`ZM_PWD_CHANGE_MAX_FAILS`（5）/`ZM_PWD_CHANGE_LOCK_MIN`（5）、`ZM_REFRESH_PER_MIN`（60）；config.py 中 `zm_trusted_proxies` 注释已改为现行行为（只取 XFF 最右第 ZM_PROXY_HOPS 项）。
