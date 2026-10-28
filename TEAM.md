@@ -98,9 +98,9 @@ def list_assets(world_id: str) -> list[Asset]
 - **mock 回归用例**：兜底后端产生不了的状态（pending 升级、半途拦截、事后替换、播放中换源、离开页面中止）用完全 mock `/api` 的 Playwright 用例覆盖（`frontend/tests`，`pnpm test:mock`），不依赖 :8000，QA 重启后端也不受影响。"播放中"用改写 `paused` 属性模拟，真实播放的听感未自动化，需人工抽查。
 - **可见 AI 标识默认隐藏（用户要求，2026-10-19）**：所有可见的「内容由AI生成」/「AI 生成」/「AI 编排」/占位图角标/海报与短视频标识文字统一由开关控制——前端 `NEXT_PUBLIC_ZM_SHOW_AI_LABEL`（构建期，默认关，`AiLabel` 直接返回 null，不留空位），后端 `ZM_SHOW_AI_LABEL`（占位 SVG 角标、万相水印默认跟随）。后端 `ai_generated`/`ai_label` 字段、`ai_meta` 与 PNG 隐式元数据保持不变，`=1` 即可整体恢复。相关测试按开关条件断言。公开上线若需满足显式标识要求，请打开开关。
 
-## 用户系统接口契约（feat/auth，草案 v1）
+## 用户系统接口契约（feat/auth，草案 v1.4-draft2）
 
-> 状态：**草案 v1（API v1.4-draft）**，2026-10-28，后端核心。只定契约，后端实现随后在 `feat/auth` 分支完成。前端可以先按本节 mock 对接。
+> 状态：**v1.4-draft2**，2026-10-28，后端核心。draft2 按 Grok Bot 的裁定兼容前端和 QA 已经写好的调用方式（§12 列出与 draft1 的差异）。实现在 `feat/auth` 分支。
 > 本节在 `TEAM.md` 和 `API.md` 里内容相同；如有出入，以 `API.md` 为准。有异议请写进 `FRONTEND_REQUESTS.md`，或直接找 织梦-后端。
 
 ### 0. 设计取舍（为什么这样定）
@@ -186,7 +186,7 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 错误：401 `invalid_credentials`，detail 固定为「用户名或密码错误」，不区分是用户不存在还是密码错 · 429 `rate_limited`（见 §5）· 422 `validation_error`。
 
 #### 3.3 `POST /api/auth/logout`（公开，幂等）
-请求体为空。返回 200 `{"ok": true}`，清除两个 cookie，并吊销当前 refresh 所在的 family。没有登录时调用也返回 200。
+请求体为空。返回 **204**（无 body），清除两个 cookie，并吊销当前 refresh 所在的 family；同一账号其他设备的会话不受影响。没有登录时调用也返回 204。
 
 #### 3.4 `POST /api/auth/refresh`（公开，需要 `zm_refresh` cookie）
 请求体为空。返回 200 `{"user": User}` 并 Set-Cookie 新的两个 cookie。
@@ -194,31 +194,32 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 
 #### 3.5 `GET /api/auth/me`（公开）
 ```json
-// 已登录
+// 已登录 → 200
 { "authenticated": true, "user": User, "auth_required": false }
-// 未登录（不返回 401，避免控制台报错）。ZM_AUTH_REQUIRED=0 时 acting_as 为 demo，此时匿名请求的数据都记在 demo 名下
-{ "authenticated": false, "user": null, "auth_required": false, "acting_as": { "id": "u_demo", "username": "demo", "nickname": "演示账号" } }
-// ZM_AUTH_REQUIRED=1 且未登录
-{ "authenticated": false, "user": null, "auth_required": true, "acting_as": null }
+// 未登录 → 401（前端按 401 判定未登录）。ZM_AUTH_REQUIRED=0 时 acting_as 为 demo，表示匿名请求的数据都记在 demo 名下，前端据此显示「演示账号」提示
+{ "detail": "请先登录", "code": "unauthorized", "auth_required": false,
+  "acting_as": { "id": "u_demo", "username": "demo", "nickname": "演示账号" } }
+// ZM_AUTH_REQUIRED=1 且未登录 → 401
+{ "detail": "请先登录", "code": "unauthorized", "auth_required": true, "acting_as": null }
 ```
-带了 `zm_access` 但已过期或无效时返回 401 `token_expired`，前端据此去调 refresh。
+带了 `zm_access` 但已过期或无效时返回 401 `token_expired`，同样附 `auth_required` / `acting_as`，前端据此去调 refresh。
+`/auth/me` 只认合法的 `zm_access`：任何伪造、篡改、签名不对、或用了未知名字的 cookie（例如 `zm_session`）都**不能**通过鉴权。
 
-#### 3.6 `PATCH /api/users/me`（需登录）
+#### 3.6 `PATCH /api/users/me`（需登录；`PATCH /api/auth/me` 是它的别名，行为完全相同）
 ```json
 { "nickname": "小雨", "bio": "喜欢民国悬疑", "email": "new@example.com", "current_password": "Dream2026!" }
 // 字段都可选；email 传 null 表示删除。修改或删除 email 必须同时带 current_password
 // 200
 { "user": User }
 ```
-错误：401 `unauthorized` / `token_expired` · 422 `validation_error` · 409 `email_taken` · 401 `invalid_password`（修改邮箱时 current_password 错误）· 403 `demo_readonly`（demo 账号不能改资料、密码、头像和邮箱，偏好可以改）。
+错误：401 `unauthorized` / `token_expired` · 422 `validation_error` · 409 `email_taken` · 401 `wrong_password`（修改邮箱时 current_password 错误）· 403 `demo_readonly`（demo 账号不能改资料、密码、头像和邮箱，偏好可以改）。
 
-#### 3.7 `PUT /api/users/me/password`（需登录）
+#### 3.7 `POST` 或 `PUT /api/users/me/password`（需登录，两种方法等价）
 ```json
 { "current_password": "Dream2026!", "new_password": "Weave#Dream88" }
-// 200 → token_version+1：其它设备全部下线，本设备重新签发 cookie
-{ "ok": true }
+// 204（无 body）→ token_version+1：其它设备全部下线，本设备重新签发 cookie
 ```
-错误：401 `invalid_password` · 400 `weak_password` · 400 `same_password` · 403 `demo_readonly` · 429 `rate_limited`（连续 5 次输错当前密码，锁 5 分钟）。
+错误：401 `wrong_password` · 400 `weak_password` · 400 `same_password` · 403 `demo_readonly` · 429 `rate_limited`（连续 5 次输错当前密码，锁 5 分钟）。
 
 #### 3.8 `POST /api/users/me/avatar`（需登录，`multipart/form-data`，字段名 `file`）
 - 只接受 `image/png`、`image/jpeg`、`image/webp`，按文件头判断真实类型，不信任扩展名和 Content-Type。大小不超过 **2 MB**，边长不超过 4096。
@@ -230,16 +231,20 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 错误：413 `file_too_large` · 415 `unsupported_media_type` · 400 `invalid_image`（文件损坏或超过 4096 边长）· 403 `demo_readonly`。
 `DELETE /api/users/me/avatar` → 200 `{ "avatar_url": null, "user": User }`。没有头像时，前端用 nickname 首字显示默认头像。
 
-#### 3.9 `GET /api/users/me/preferences` / `PATCH /api/users/me/preferences`（需登录；`ZM_AUTH_REQUIRED=0` 时匿名请求读写 demo 的偏好）
+#### 3.9 偏好 `GET` / `PUT` / `PATCH /api/users/me/preferences`（需登录；`ZM_AUTH_REQUIRED=0` 时匿名请求读写 demo 的偏好）
 ```json
 // GET 200
 { "preferences": Preferences }
+// PUT：整体覆盖，没传的字段回到默认值（见 §1）
+{ "minor_mode": false, "rating": "teen", "tts_enabled": true, "autoplay_audio": false, "show_god_view": true,
+  "education": { "grade": null, "subject": null, "auto_summary": true }, "language": "zh" }
 // PATCH：部分合并（education 也是部分合并）
 { "minor_mode": true, "tts_enabled": false, "education": { "grade": "初二" } }
-// 200
+// 两者都返回 200
 { "preferences": Preferences }
 ```
-未成年人模式从 **true 改为 false** 必须同时带 `"current_password"`，作为家长确认。没带或错误返回 401 `invalid_password`；demo 账号不能关闭，返回 403 `demo_readonly`。打开（变严格）不需要密码。
+请求体也可以包一层 `{"preferences": {...}}`，效果相同。
+不论 PUT 还是 PATCH，只要让未成年人模式从 **true 变为 false**，都必须同时带 `"current_password"`，作为家长确认（PUT 漏传 minor_mode 时回到默认值 false，也算关闭）。没带或密码错误返回 401 `wrong_password`；demo 账号不能关闭，返回 403 `demo_readonly`。打开（变严格）不需要密码。
 错误：422 `validation_error`（未知字段或取值非法）。
 
 #### 3.10 `GET /api/users/me/stats`（需登录；`ZM_AUTH_REQUIRED=0` 时匿名请求统计 demo 的数据）
@@ -251,11 +256,8 @@ type User = { id: string; username: string; email: string | null; nickname: stri
   "play":     { "turns": 86, "chapters": 19, "injected_events": 4, "offscreen_events": 51, "memories": 233,
                 "first_played_at": "2026-10-19T08:12:00+00:00", "last_played_at": "2026-10-28T07:40:11+00:00" },
   "assets":   { "image": 14, "audio": 15 },
-  "learning": { "worlds": 2, "turns": 23, "knowledge_cards": 17,
-                "recent": [ { "world_id": "w_ab12", "title": "赤壁怀古", "subject": "语文", "grade": "初二", "turns": 12, "cards": 9,
-                              "updated_at": "2026-10-27T12:00:00+00:00",
-                              "summary": { "key_points": ["…"], "reflection": "…", "source": "llm", "turn_count": 12,
-                                           "generated_at": "2026-10-27T12:01:00+00:00" } } ] },
+  "learning": { "worlds": 2, "turns": 23, "knowledge_cards": 17, "summaries": 1,
+                "latest": LearningRecord | null },
   "reports_submitted": 0,
   "recent_worlds": [ WorldSummary ]
 }
@@ -266,8 +268,20 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 - `play.turns`：`turns` 表计数。`play.chapters`：各世界 `state.chapter` 之和。`injected_events` / `offscreen_events`：`events.type` 为 `injected` / `offscreen` 的计数。`memories`：`memories` 表计数。`first_played_at` / `last_played_at`：最早和最近一个回合的 `created_at`。
 - `assets.*`：`assets.type` 计数。
 - `learning.worlds`：`mode=education` 的世界数。`learning.turns`：这些世界的回合数。`learning.knowledge_cards`：这些世界的 `knowledge_cards` 数量之和。
-- `learning.recent`：最近 5 个教育世界，`subject` / `grade` 取自 `state.flags.edu`。
-- `learning.recent[].summary`：**最近一次已生成的学习小结**。实现阶段会把 `GET /education/summary` 得到的 `status:"complete"` 结果持久化到 `state.flags.edu_summary`（目前只在内存缓存里，重启就丢）。从没生成过时为 `null`，前端可以显示「生成学习小结」按钮，点击后去调 `/education/summary`。
+- `learning.summaries`：已持久化学习小结的教育世界数。`learning.latest`：最近更新的那一条学习记录，没有教育世界时为 null；完整列表见 §3.11。
+- `LearningRecord.summary`：**最近一次已生成的学习小结**。`GET /education/summary` 每次得到 `status:"complete"` 的结果，都会持久化到 `state.flags.edu_summary`。从没生成过时为 `null`，前端可以显示「生成学习小结」按钮，点击后去调 `/education/summary`。
+
+#### 3.11 `GET /api/users/me/learning?limit=20&offset=0`（需登录；模式 0 下匿名请求对应 demo）
+学习记录，即教育模式的世界，按 `updated_at` 倒序分页。`limit` 取 1–100，默认 20。
+```ts
+type LearningRecord = { world_id: string; title: string; subject: string | null; grade: string | null; status: string;
+  turns: number; cards: number; created_at: string; updated_at: string;
+  summary: { key_points: string[]; reflection: string; source: "llm" | "fallback"; turn_count: number; generated_at: string } | null }
+```
+```json
+// 200
+{ "items": [ LearningRecord ], "total": 2, "limit": 20, "offset": 0 }
+```
 - `recent_worlds`：最近更新的 5 个世界。
 
 ### 4. 校验规则
@@ -302,8 +316,9 @@ type User = { id: string; username: string; email: string | null; nickname: stri
   - `/api/assets/{id}`、`/api/assets/{id}/regenerate`（通过 asset 所属的 world 检查归属）。
   - `POST /api/education/generate`。
   - `POST /api/reports`（记录 `reporter_id`；如果带了 world_id，该世界必须属于自己）；`GET /api/reports?world_id=`（只能查自己的世界；管理员用 `X-Admin-Token` 查全量的逻辑不变）。
-  - `/api/users/me/*`。PATCH 资料、密码、头像这几个接口**始终要求真实登录**：即使 `ZM_AUTH_REQUIRED=0`，匿名请求也返回 401 `unauthorized`。preferences 和 stats 在模式 0 下匿名请求作用于 demo。
-- **公开接口**：`/api/health`（新增 `"auth": {"required": bool}`）、`/api/safety/policy`、`/api/safety/check`、`/api/auth/register|login|logout|refresh|me`、静态文件。
+  - `/api/users/me/*`。PATCH 资料（含 `PATCH /api/auth/me`）、密码、头像这几个接口**始终要求真实登录**：即使 `ZM_AUTH_REQUIRED=0`，匿名请求也返回 401 `unauthorized`。preferences 和 stats 在模式 0 下匿名请求作用于 demo。
+- **公开接口**：`/api/health`（新增 `"auth": {"required": bool}`）、`/api/safety/policy`、`/api/safety/check`、`/api/auth/register|login|logout|refresh`、`GET /api/auth/me`（未登录时返回 401，见 §3.5）、静态文件。
+- **调试接口** `GET /api/debug/status`：需要真实登录，或带与 `ZM_ADMIN_TOKEN` 一致的 `X-Admin-Token` 头；否则返回 401 `unauthorized`。返回 `{auth_required, multimodal: <multimodal.status()> | null, llm_runtime}`，不发起远程调用，不影响 `/api/health`。
 - 后台任务（补全、资产升级、重启后恢复补全）不涉及用户身份，按 world_id 工作，行为不变。
 
 ### 7. 旧数据迁移（启动时自动执行，幂等）
@@ -326,7 +341,7 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 | 401 | `token_expired` | access 过期或无效 → 前端调用 refresh 后重试一次 |
 | 401 | `refresh_invalid` | refresh 失效 → 前端清除登录态，跳转登录页或回到匿名模式 |
 | 401 | `invalid_credentials` | 登录时用户名或密码错误 |
-| 401 | `invalid_password` | 修改密码、邮箱、关闭未成年人模式时，当前密码错误 |
+| 401 | `wrong_password` | 修改密码、邮箱、关闭未成年人模式时，当前密码错误 |
 | 400 | `weak_password` / `same_password` / `username_reserved` / `invalid_image` / `content_blocked` | |
 | 403 | `forbidden` / `demo_readonly` | Origin 不在白名单 / demo 账号不能执行此修改 |
 | 404 | `not_found` | 资源不存在，或不属于当前用户 |
@@ -341,6 +356,7 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 `ZM_AUTH_REQUIRED`（默认 0）· `ZM_JWT_SECRET`（缺省时自动生成并保存到 `$ZM_DATA_DIR/jwt_secret`）· `ZM_ACCESS_TTL_MIN`（30）· `ZM_REFRESH_TTL_DAYS`（30）· `ZM_COOKIE_SECURE`（0）· `ZM_DEMO_PASSWORD`（缺省时随机生成并写入 `$ZM_DATA_DIR/demo_password.txt`）· `ZM_TRUST_PROXY`（1，只采信来自本机代理的 XFF）· `ZM_AVATAR_MAX_BYTES`（2097152）。
 
 ### 11. 前端对接清单（织梦-前端）
+0. draft2 改动：`register` / `login` 返回 `{user}`，需要取 `.user`；`logout` 和改密码返回 204；未登录时 `/auth/me` 返回 401，但 401 的 body 里有 `auth_required` 和 `acting_as`。
 1. `lib/api.ts` 和 `lib/sse.ts`：所有请求加 `credentials:"include"`。统一包一层：收到 401 `token_expired` 时先 `POST /api/auth/refresh`（并发请求共享同一个 refresh promise），然后重试**一次**；refresh 返回 `refresh_invalid` 就清除登录态。SSE 在建立前也可能收到 401，同样处理。
 2. 新增页面：`/login`、`/register`（用户名、密码、可选邮箱、昵称；按 `field` 把错误显示到对应字段下；429 时按 `retry_after` 倒计时）、`/me` 个人中心（资料编辑、头像上传带裁剪预览、修改密码、偏好设置、统计面板、最近世界、学习记录）。
 3. 全局：启动时调 `GET /api/auth/me`，顶栏显示头像和昵称或「登录」按钮；`auth_required:true` 且未登录时，访问受保护页面跳转 `/login?next=`；`auth_required:false` 且未登录时，显示提示条「当前为演示账号，登录后保存到你自己的账号」。
@@ -349,3 +365,42 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 6. 配音：`preferences.tts_enabled=false` 时隐藏或不播放音频，`autoplay_audio` 控制是否自动播放。
 7. 登出后清空本地缓存（世界列表、待重试的回合请求体等）。
 8. 建议新增 data-testid（交给 QA 写进 `tests/e2e/TESTIDS.md`）：`auth-username`、`auth-password`、`auth-email`、`auth-submit`、`auth-error`、`user-menu`、`logout-btn`、`profile-nickname`、`profile-bio`、`avatar-upload`、`pref-minor-mode`、`stats-panel`。
+
+### 12. draft2 相对 draft1 的变更（Grok Bot 裁定，2026-10-28）
+1. `GET /api/auth/me` 未登录时改为返回 401 `{detail, code:"unauthorized", auth_required, acting_as}`；已登录时返回 200 `{authenticated:true, user, auth_required}`。
+2. register 和 login 返回 `{user}`（不变，前端需要改）。
+3. logout 和改密码成功都返回 **204**。
+4. 改密码同时接受 POST 和 PUT；`invalid_password` 合并为 `wrong_password`。
+5. 偏好同时支持 PUT（整体覆盖，缺的字段回到默认值）和 PATCH（部分合并）。
+6. 新增 `GET /api/users/me/learning`（分页）；`stats.learning` 只保留计数和 `latest`。
+7. 新增 `PATCH /api/auth/me`，作为 `PATCH /api/users/me` 的别名。
+8. cookie 名仍是 `zm_access` / `zm_refresh`；任何无效或伪造的 cookie（包括 `zm_session`）都不能通过鉴权。
+9. 新增 `GET /api/debug/status`；TEAM.md 新增「账号/鉴权 QA 契约」一节。
+
+## 账号/鉴权 QA 契约（feat/auth，v1.4-draft2）
+供 QA 编写和调整 `backend/tests/integration/test_auth.py` 与 e2e 使用。接口细节以上一节「用户系统接口契约」为准。
+
+**环境变量**
+| 变量 | 默认值 | 对测试的影响 |
+|---|---|---|
+| `ZM_AUTH_REQUIRED` | `0` | **测「匿名访问被拒（401 unauthorized）」时必须设为 `1`**。为 0 时匿名请求按 demo（`u_demo`）处理，现有不带 cookie 的用例照常通过 |
+| `ZM_DATA_DIR` | `backend/data` | 每个 tmp 目录里会自动生成 `jwt_secret`、`demo_password.txt`（权限 0600） |
+| `ZM_DEMO_PASSWORD` | 无（随机生成） | 设置后可以用 `demo` 加这个密码登录；测试里不要打印它 |
+| `ZM_JWT_SECRET` | 无（自动生成并持久化） | 更换后旧 cookie 全部失效 |
+| `ZM_ACCESS_TTL_MIN` / `ZM_REFRESH_TTL_DAYS` | 30 / 30 | 可调小来测过期 |
+| `ZM_COOKIE_SECURE` | `0` | 设为 1 时 http 下浏览器不会回传 cookie |
+| `ZM_FORCE_FALLBACK` / `ZM_DISABLE_IMAGE` | — | 照旧：测试一律设为 1，不调用真实模型和生图 |
+
+**可测行为**
+1. 注册：201 `{user}`，同时 Set-Cookie `zm_access`（Path=/api）和 `zm_refresh`（Path=/api/auth），都是 HttpOnly、SameSite=Lax。用户名重复返回 409 `username_taken`；邮箱重复返回 409 `email_taken`；保留名返回 400 `username_reserved`；弱密码返回 400 `weak_password`；格式不对返回 422 `validation_error`，附 `field`。
+2. 登录：用户名或邮箱都能登，不区分大小写，返回 200 `{user}`。密码错误返回 401 `invalid_credentials`。同一 IP 加同一 login 失败 5 次后返回 429 `rate_limited`，带 `retry_after` 和 `Retry-After` 头；锁定期内密码正确也返回 429。
+3. `GET /api/auth/me`：已登录返回 200 `{authenticated:true, user, auth_required}`；未登录返回 401 `unauthorized`，附 `auth_required` 和 `acting_as`。伪造的 cookie（`zm_access=garbage`、`zm_session=…`、签名不对的 JWT）不能登录：带 `zm_access` 时返回 401 `token_expired`，只带未知名字的 cookie 时返回 401 `unauthorized`。
+4. 登出返回 204，之后同一会话的 access 和 refresh 都失效（`/auth/me` 返回 401，refresh 返回 401 `refresh_invalid`）；同一账号的其他会话不受影响。
+5. refresh 返回 200 `{user}`，并轮换两个 cookie。再用旧的 refresh 会返回 401 `refresh_invalid`，并且整串 family 被吊销：新拿到的 refresh 也会失效。
+6. 改密码（POST 或 PUT）返回 204；旧密码错误返回 401 `wrong_password`。改完后其他会话的 access 立即失效（401 `token_expired`）。
+7. 隔离：A 的世界对 B 一律返回 404 `not_found`，覆盖 GET、DELETE、turns、SSE、export、poster、god、memory、assets、education、`reports?world_id=`。`GET /api/worlds` 只列出自己的世界。B 导入 A 导出的存档，会得到属于 B 的新世界。
+8. `ZM_AUTH_REQUIRED=1`：匿名访问 `/api/worlds*`、`/api/assets/*`、`/api/education/*`、`/api/users/me/*`、`POST /api/reports` 都返回 401 `unauthorized`；`/api/health`、`/api/safety/*`、register、login、refresh、logout 仍然公开。
+9. `ZM_AUTH_REQUIRED=0`：匿名请求的世界 `owner_id` 为 `u_demo`；已登录用户看不到 demo 的世界。`PATCH /users/me`、改密码、上传头像在匿名时仍返回 401。
+10. 偏好下限：`minor_mode:true` 时，生成世界的 `minor_mode` 必为 true，rating 不高于 teen；`PATCH /worlds/{id}/settings` 时传 `minor_mode:false` 会被忽略，响应头带 `X-ZM-Clamped`。关闭未成年人模式要带 `current_password`。
+11. 头像只收 png/jpeg/webp，最大 2MB，转成 256×256 webp；类型不对返回 415，超大返回 413，文件损坏返回 400 `invalid_image`。
+12. `/api/health` 返回 `auth.required`；`GET /api/debug/status` 未登录且没有 admin token 时返回 401。
