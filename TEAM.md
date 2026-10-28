@@ -451,7 +451,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 | AUTH-QA-3 | 织梦-前端 + 织梦-后端（需 Grok Bot 定方案） | **高**：Next 的 `/api` rewrite 代理不会用真实对端地址写 `X-Forwarded-For`，而是把客户端发来的 XFF 原样转发；后端信任前端容器（私网段）→ ① 任何客户端可在请求里伪造 XFF，每次换一个就绕过全部按 IP 的登录/注册限流（同账号可无限猜密码）；② 普通浏览器不带 XFF，后端看到的全是前端容器 IP（如 172.21.0.3），全站共用一个限流桶：任意人累计 20 次登录失败会锁住所有人 15 分钟、全站每小时只能注册 10 个账号。dev 模式（Next 在 127.0.0.1 代理）同理 | Docker（:3140）：① 对同一账号用 12 个不同的 `X-Forwarded-For` 连续输错密码 → 12 次全是 401，从未 429；② 不带 XFF 对 5 个账号累计输错 20 次 → 另一个与此无关的账号用正确密码登录返回 **429**。`auth_events.ip` 记录：不带 XFF 时为 `172.21.0.3`，带 `X-Forwarded-For: 9.9.9.9` 时为 `9.9.9.9` | 前端代理把 XFF 覆盖为真实对端地址（例如 Next middleware / route handler 代理，或在 compose 里加一层 nginx/caddy 设置 `X-Forwarded-For $remote_addr`）；后端只信任这一跳；另外建议后端加「按账号（不分 IP）」的失败上限作为第二道防线，防止轮换 IP 撞库 | **VERIFIED（2026-10-28 18:20，后端 43c73a7 + 前端 3501193 + compose 固定前端 IP）**：dev（:3130）与 Docker（:3140）经前端代理每次换伪造 XFF/X-Real-IP/Forwarded，5 次失败后正确密码仍 429；同源另一账号不受影响；Docker 直连后端 :8140（对端为网关 172.30.53.1，不可信）伪造 XFF 被忽略；`auth_events.ip` 全部为真实 TCP 来源。`pnpm test:client-ip` 11/11。剩余影响（同源共享按 IP 额度）另列 AUTH-QA-7 |
 | AUTH-QA-4 | 织梦-前端 | `/register` 水合报错：`PasswordMeter`（`<div>`）放在 `FormField` 的 hint `<p className="field-hint">` 里，`<div>` 不能嵌在 `<p>` 里 → React 报 "Hydration failed"，dev 下左下角出现 Next 错误角标（3 Issues），客户端会整棵重建 | `next dev` 打开 `/register`，浏览器控制台 / 终端出现 `In HTML, <div> cannot be a descendant of <p>` 与 `Hydration failed`（`src/components/FormField.tsx:66`、`RegisterView.tsx:168`） | hint 容器改为 `<div>`，或 PasswordMeter 改用 `<span>` | **VERIFIED**（前端 2405e86 / a09e8d3）：`tests/hydration.spec.ts` 13/13，E2E 中 /register 无水合报错 |
 | AUTH-QA-5 | 全体（流程） | 同一 worktree 里多个 bot 同时跑 Playwright：`tests/e2e/test-results/` 被另一运行清理导致 ENOENT，原固定 `.auth/state.json` 被另一后端的登录态覆盖导致 AC-3~8 全部掉到登录页；`docs/screens/01~13.png` 在 17:00 被其它运行重写（未提交） | 两个 `playwright test` 并发 | QA 侧已改为每次运行专属状态文件；各自跑测试请加 `--output=<自己的目录>`，截图类用例别并发；`docs/screens/01~13` 是否要提交请截图的同学确认 | **VERIFIED**：E2E 登录态按运行隔离（QA 侧）；前端 mock 输出改到 `/tmp/fe-pw-out`（ZM_PW_OUT，前端 ebfe90f）；本轮 QA 各套件均用独立 `--output`，docs/screens 截图全部由 QA 本轮重新生成 |
-| AUTH-QA-6 | 织梦-后端 | 低：「可信代理没传 XFF」的 WARNING 在每个 Docker 容器启动后都会被**健康检查本身**触发（容器内 `urllib` → `127.0.0.1:8000/api/health`，对端可信且无 XFF），日志里出现一条误报，真正的代理配置错误反而被淹没 | `docker compose up -d` 后 `docker logs <backend> \| grep X-Forwarded-For` → 1 条，来源 127.0.0.1，而此时还没有任何外部请求 | 只对需要客户端 IP 的接口（登录/注册/refresh）判定并告警，或对 `/api/health` 跳过 | OPEN |
+| AUTH-QA-6 | 织梦-后端 | 低：「可信代理没传 XFF」的 WARNING 在每个 Docker 容器启动后都会被**健康检查本身**触发（容器内 `urllib` → `127.0.0.1:8000/api/health`，对端可信且无 XFF），日志里出现一条误报，真正的代理配置错误反而被淹没 | `docker compose up -d` 后 `docker logs <backend> \| grep X-Forwarded-For` → 1 条，来源 127.0.0.1，而此时还没有任何外部请求 | 只对需要客户端 IP 的接口（登录/注册/refresh）判定并告警，或对 `/api/health` 跳过 | **VERIFIED（后端 8ce9df1，QA 2026-10-28 18:33）**：Docker 新容器 5 轮健康检查后日志 0 条该 WARNING；auth E2E + XFF 探针后仍 0 条；容器内对 /api/auth/login 不带 XFF 连发 2 次 → 恰好 1 条（只在 login/register/refresh 触发、每进程一次） |
 | AUTH-QA-7 | Grok Bot 定方案（部署：织梦-后端 / QA 文档） | 中：直接 `docker compose up`（前面没有反向代理）时，宿主端口经 docker-proxy 转发，前端看到的 TCP 来源全是 Docker 网关 `172.30.53.1`，所有访问者共享一个 IP 的额度：同源 15 分钟累计 20 次登录失败（任何账号，含不存在的用户名）→ **全站所有人被锁 15 分钟**；全站每小时只能注册 10 个账号。可被用作拒绝服务 | Docker :3140：用 20 个不存在的用户名各输错 1 次 → 无关账号正确密码 429（retry_after 900）；注册累计 10 次后第 11 次 429（retry_after≈3480）。`auth_events.ip` 全为 172.30.53.1 | 对外部署必须前置反向代理并 `ZM_FRONTEND_TRUST_PROXY=1`、`FRONTEND_BIND=127.0.0.1`（README「客户端 IP 与反向代理」已写）；可选 dockerd `userland-proxy: false`；产品上可考虑每 IP 失败上限对网关地址放宽、或仅按「IP+账号」与「按账号」锁定 | **WONTFIX（文档说明）**——Grok Bot 决定（2026-10-28 18:22）：不放宽按 IP 的限制，只在 README 说明部署方式（前置反向代理）与演示场景调大阈值。已确认 `ZM_REGISTER_PER_HOUR` / `ZM_REGISTER_GLOBAL_PER_HOUR` / `ZM_LOGIN_ACCOUNT_MAX_FAILS` / `_WINDOW_MIN` / `_LOCK_MIN` 后端读取生效且 compose 透传（QA 补了 `ZM_REGISTER_PER_HOUR`）；按 IP 的登录失败上限（IP+账号 5 次/锁 5 分钟、每 IP 20 次/锁 15 分钟）、改密码 5 次、refresh 60 次/分钟为代码固定值，无变量 |
 
 ### 后端回复 QA 记录（织梦-后端，2026-10-28）
@@ -512,3 +512,18 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 > AUTH-QA-6 FIXED：「可信代理无 XFF」告警只在 `/api/auth/login|register|refresh` 上触发（每进程一次），健康检查不再误报；用例 `backend/tests/core/test_auth_qa6.py`。
 
 > 织梦-后端（2026-10-28 18:40）按 QA 建议把 ratelimit.py 原写死阈值改为可配置（默认值不变）：`ZM_LOGIN_WINDOW_MIN`（15）、`ZM_LOGIN_IP_ACCOUNT_MAX_FAILS`（5）/`ZM_LOGIN_IP_ACCOUNT_LOCK_MIN`（5）、`ZM_LOGIN_IP_MAX_FAILS`（20）/`ZM_LOGIN_IP_LOCK_MIN`（15）、`ZM_PWD_CHANGE_MAX_FAILS`（5）/`ZM_PWD_CHANGE_LOCK_MIN`（5）、`ZM_REFRESH_PER_MIN`（60）；config.py 中 `zm_trusted_proxies` 注释已改为现行行为（只取 XFF 最右第 ZM_PROXY_HOPS 项）。
+
+**QA 快速回归（2026-10-28 18:35，feat/auth 6f4cc35 + QA；兜底模式 + ZM_DISABLE_IMAGE=1，无 DASHSCOPE_API_KEY）**
+
+| 套件 | 环境 | 通过 | 失败 | 跳过 |
+|---|---|---|---|---|
+| API pytest `backend/tests/integration`，ZM_AUTH_REQUIRED=0 | 进程内 | 117 | 0 | 12 |
+| API pytest `backend/tests/integration`，ZM_AUTH_REQUIRED=1 | 进程内 | 126 | 0 | 3 |
+| 后端 core + unit（含 test_auth_qa6） | 进程内 | 221 | 0 | 0 |
+| E2E AC-1~9 + auth.spec 5，模式 1 | :8130/:3130（生产构建） | 14 | 0 | 0 |
+| Docker auth.spec | `-p zhimeng-auth`，ZM_IMAGE_TAG=auth，:8140/:3140，ZM_AUTH_REQUIRED=1，无 .env，重新 build | 5 | 0 | 0 |
+| Docker XFF 探针（经前端 / 直连后端 / 同源额度） | :3140 / :8140 | 6 | 0 | 0 |
+
+- 新增用例 `test_ip_login_thresholds_configurable`：调小 `ZM_LOGIN_IP_ACCOUNT_*` / `ZM_LOGIN_IP_*` 后按新阈值锁定，换 IP 不受影响（6f4cc35 生效）。
+- 13 个限流变量 compose 全部透传（`docker compose config` 覆盖值逐一出现），容器内 `get_settings()` 读到的默认值与代码一致；README 环境变量表、Docker 演示 `.env` 示例、`.env.example` 已同步，「按 IP 登录限制不可调」的说法已删除。
+- Docker 两容器 healthy；最后已 `down`。

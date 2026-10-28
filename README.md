@@ -198,6 +198,11 @@ pnpm dev            # http://localhost:3000
 | `ZM_NET_SUBNET` / `ZM_FRONTEND_IP` | `172.30.53.0/24` / `172.30.53.10` | compose 网络固定子网与前端容器固定 IP（后端据此精确信任前端）；与宿主网段冲突时两者一起改 |
 | `FRONTEND_BIND` / `BACKEND_BIND` | `0.0.0.0` / `127.0.0.1` | Docker 端口绑定地址；有前置反向代理时把 `FRONTEND_BIND` 设为 `127.0.0.1` |
 | `ZM_AVATAR_MAX_BYTES` / `ZM_REGISTER_PER_HOUR` | `2097152` / `10` | 头像大小上限 / 同 IP 每小时注册上限（IP 未知时不适用） |
+| `ZM_LOGIN_WINDOW_MIN` | `15` | 按 IP 的登录失败与改密码失败的计数窗口（分钟） |
+| `ZM_LOGIN_IP_ACCOUNT_MAX_FAILS` / `ZM_LOGIN_IP_ACCOUNT_LOCK_MIN` | `5` / `5` | 同一 IP + 同一账号窗口内失败 N 次锁定 M 分钟（登录成功清零） |
+| `ZM_LOGIN_IP_MAX_FAILS` / `ZM_LOGIN_IP_LOCK_MIN` | `20` / `15` | 同一 IP（不论账号）窗口内失败 N 次锁定 M 分钟；直接 compose 时所有访问者同源，等于全站共享 |
+| `ZM_PWD_CHANGE_MAX_FAILS` / `ZM_PWD_CHANGE_LOCK_MIN` | `5` / `5` | 改密码时当前密码输错 N 次锁定 M 分钟 |
+| `ZM_REFRESH_PER_MIN` | `60` | 同一 IP 每分钟 refresh 上限（IP 未知时不限） |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
 | `ZM_PROXY_TIMEOUT_MS` | `180000` | Next 反向代理超时（毫秒）；Next 16 默认 30s 会让长请求 socket hang up（BUG-007）；修改后需重新 build / 启动前端 |
@@ -347,7 +352,7 @@ docker compose down               # 停止（数据保留在命名卷中）；do
   另一种做法是 dockerd 设置 `"userland-proxy": false`（iptables DNAT 保留外部来源地址；本机回环访问仍显示为网关）。
 - 按账号上限（10 次 / 15 分钟）与 IP 无关，无论部署方式都生效。
 - **演示 / 答辩等多人现场注册**：按 IP 的规则不放宽（AUTH-QA-7，Grok Bot 决定），但直接 `docker compose up` 时所有人同源，
-  可在 `.env` 把下列阈值临时调大（均已在 compose 里透传，改完 `docker compose up -d` 重建后端容器即生效，结束后改回默认）：
+  可在 `.env` 把下列阈值临时调大（全部变量均已在 compose 里透传，改完 `docker compose up -d` 重建后端容器即生效，结束后改回默认）：
 
   ```bash
   # .env —— 演示/答辩场景示例（默认值见注释）
@@ -356,10 +361,14 @@ docker compose down               # 停止（数据保留在命名卷中）；do
   ZM_LOGIN_ACCOUNT_MAX_FAILS=20     # 同一账号窗口内允许失败次数（默认 10）
   ZM_LOGIN_ACCOUNT_WINDOW_MIN=15    # 按账号计数窗口，分钟（默认 15）
   ZM_LOGIN_ACCOUNT_LOCK_MIN=5       # 按账号锁定时长，分钟（默认 15）
+  ZM_LOGIN_IP_MAX_FAILS=200         # 同一来源 IP 累计失败上限（默认 20；直接 compose 时全场共享，最该调大）
+  ZM_LOGIN_IP_LOCK_MIN=5            # 达到上一条后锁定分钟数（默认 15）
+  ZM_LOGIN_IP_ACCOUNT_MAX_FAILS=10  # 同一 IP + 同一账号失败上限（默认 5）
+  ZM_LOGIN_IP_ACCOUNT_LOCK_MIN=2    # 达到上一条后锁定分钟数（默认 5）
   ```
 
-  注意：「同一 IP + 账号 5 次失败锁 5 分钟」「同一 IP 累计 20 次失败锁 15 分钟」目前是代码内固定值，不能用环境变量调整；
-  现场请提醒大家输错密码不要反复重试；重启后端不会清除计数（计数存在数据库里），只能等锁定到期自动解除。
+  按 IP 的登录限制也可以调（`ZM_LOGIN_IP_*`、`ZM_LOGIN_WINDOW_MIN`、`ZM_PWD_CHANGE_*`、`ZM_REFRESH_PER_MIN`，见「环境变量」表），默认值不变；
+  演示结束后删掉这些行恢复默认。重启后端不会清除已有计数（计数存在数据库里），只能等锁定到期自动解除。
 
 ## 实际取舍
 

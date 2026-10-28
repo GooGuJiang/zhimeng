@@ -792,3 +792,20 @@ def test_global_register_cap(client, tune):
     client.cookies.clear()
     r2 = client.post("/api/auth/register", json={"username": unique_name("cap2"), "password": AUTH_PASSWORD, "nickname": "x"})
     _assert_locked(r2, "全站注册上限（IP 未知也生效）")
+
+
+def test_ip_login_thresholds_configurable(client, tune):
+    """6f4cc35：按 IP 的登录限制可用环境变量调整（AUTH-QA-7 演示场景调大 / 这里调小验证生效）。"""
+    tune(ZM_LOGIN_IP_ACCOUNT_MAX_FAILS=2, ZM_LOGIN_IP_ACCOUNT_LOCK_MIN=1, ZM_LOGIN_IP_MAX_FAILS=4, ZM_LOGIN_IP_LOCK_MIN=1)
+    ip = unique_ip()
+    _, a = register_user(client, unique_name("ipa"))
+    for _ in range(2):
+        assert login_user(client, a, "Wrong-pass-999", ip=ip).status_code == 401
+    r = login_user(client, a, ip=ip)
+    _assert_locked(r, "IP+账号 2 次即锁")
+    assert int(r.json()["retry_after"]) <= 60, r.text
+    users = [register_user(client, unique_name("ipb"))[1] for _ in range(3)]
+    for u in users[:2]:
+        assert login_user(client, u, "Wrong-pass-999", ip=ip).status_code == 401  # 同 IP 累计第 3、4 次
+    _assert_locked(login_user(client, users[2], ip=ip), "同 IP 累计 4 次即锁（不论账号）")
+    assert login_user(client, users[2], ip=unique_ip()).status_code == 200, "换 IP 不受影响"
