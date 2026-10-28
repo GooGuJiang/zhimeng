@@ -113,6 +113,10 @@ fi
 if [[ $RUN_WEB -eq 1 ]]; then
 (
   cd frontend
+  # AUTH-QA-3：预加载 client-ip-guard（删掉客户端带的 XFF/X-Real-IP/Forwarded，只写 TCP 来源地址）。
+  # 后端的 ZM_TRUST_PROXY（默认 1，含义不同）不传给前端；前端前面确有自己的反向代理时设 ZM_FRONTEND_TRUST_PROXY=1。
+  export NODE_OPTIONS="--require ./scripts/client-ip-guard.cjs ${NODE_OPTIONS:-}"
+  export ZM_TRUST_PROXY="${ZM_FRONTEND_TRUST_PROXY:-0}"
   if [[ $FRONT_PROD -eq 1 ]]; then
     pnpm build && exec pnpm exec next start -p "$FRONTEND_PORT"
   else

@@ -23,7 +23,8 @@ services:
       ZM_DEMO_PASSWORD: ${ZM_DEMO_PASSWORD:-}        # 演示账号 demo 的初始密码；留空则自动生成写入 /data/demo_password.txt
       ZM_JWT_SECRET: ${ZM_JWT_SECRET:-}              # 留空则自动生成写入 /data/jwt_secret
       # 只采信这些网段转发来的 X-Forwarded-For（前端容器在 compose 私网里）；后端端口不要对公网开放
-      ZM_TRUSTED_PROXIES: ${ZM_TRUSTED_PROXIES:-127.0.0.1/32,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      # 只信任回环和前端容器的固定 IP（见下方 networks / frontend.ipv4_address），不再信任整个私网段
+      ZM_TRUSTED_PROXIES: ${ZM_TRUSTED_PROXIES:-127.0.0.1/32,::1,${ZM_FRONTEND_IP:-172.30.53.10}/32}
       ZM_PROXY_HOPS: ${ZM_PROXY_HOPS:-1}              # 只取 XFF 从右数第 N 项（前端容器这一跳 = 1）
       ZM_LOGIN_ACCOUNT_MAX_FAILS: ${ZM_LOGIN_ACCOUNT_MAX_FAILS:-10}   # 按账号失败上限（与 IP 无关）
       ZM_LOGIN_ACCOUNT_WINDOW_MIN: ${ZM_LOGIN_ACCOUNT_WINDOW_MIN:-15}
@@ -39,7 +40,7 @@ services:
     ports:
       # 只绑定本机回环：浏览器只需访问前端（/api 经内部网络代理）。后端信任私网段转发的 X-Forwarded-For，
       # 若对外开放该端口，外部可伪造 XFF 绕过按 IP 限流；本机 curl / E2E 的 request 夹具仍可直连。
-      # 确需对外暴露后端时设 BACKEND_BIND=0.0.0.0，并同时把 ZM_TRUSTED_PROXIES 收窄到前端容器所在网段
+      # 确需对外暴露后端时设 BACKEND_BIND=0.0.0.0（ZM_TRUSTED_PROXIES 默认已只含前端容器 IP）
       - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
@@ -60,8 +61,15 @@ services:
     image: zhimeng-frontend:${ZM_IMAGE_TAG:-latest}
     environment:
       BACKEND_ORIGIN: http://backend:8000
+      # AUTH-QA-3：前端（client-ip-guard）默认丢弃客户端带来的 XFF，只写 TCP 来源地址。前面另有自己的反向代理
+      # （nginx/caddy，且它用真实来源覆盖 X-Forwarded-For）时设 ZM_FRONTEND_TRUST_PROXY=1，采信上游最后一跳
+      ZM_TRUST_PROXY: ${ZM_FRONTEND_TRUST_PROXY:-0}
+    networks:
+      default:
+        ipv4_address: ${ZM_FRONTEND_IP:-172.30.53.10}
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      # 前面另有反向代理（并设 ZM_FRONTEND_TRUST_PROXY=1）时设 FRONTEND_BIND=127.0.0.1，只让反代访问前端，否则客户端可伪造 XFF
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -83,3 +91,8 @@ networks:
     name: zhimeng_net
     driver_opts:
       com.docker.network.bridge.name: zm-br0   # 固定网桥名，便于在宿主防火墙放行容器间流量（见 README「Docker 运行」）
+    ipam:
+      config:
+        # 固定子网，让前端容器有固定 IP 供后端 ZM_TRUSTED_PROXIES 精确信任；与宿主已有网段冲突时在 .env 改
+        # ZM_NET_SUBNET 和 ZM_FRONTEND_IP（两者须匹配）
+        - subnet: ${ZM_NET_SUBNET:-172.30.53.0/24}

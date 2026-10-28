@@ -2,7 +2,7 @@
 
 契约：API.md / TEAM.md「用户系统接口契约」与「账号/鉴权 QA 契约」（v1.4-draft2）。
 - 后端未实现 /api/auth/*（GET /api/auth/me → 404）时整个模块 skip。
-- 两种模式都要跑（scripts/test-auth.sh 会各跑一遍）：
+- 两种模式都要跑（scripts/qa.sh api 会各跑一遍）：
     默认 ZM_AUTH_REQUIRED=0：匿名请求 = 演示账号 u_demo；
     ZM_AUTH_REQUIRED=1：匿名访问受保护接口 → 401 unauthorized。
   每个模式专属的用例在另一模式下 skip（原因写明）。
@@ -260,7 +260,7 @@ def test_me_anonymous_default_mode_acts_as_demo(anon, required):
 
 def test_me_anonymous_required_mode(anon, required):
     if not required:
-        pytest.skip("默认 ZM_AUTH_REQUIRED=0：请用 ZM_AUTH_REQUIRED=1 再跑一遍（scripts/test-auth.sh）")
+        pytest.skip("默认 ZM_AUTH_REQUIRED=0：请用 ZM_AUTH_REQUIRED=1 再跑一遍（scripts/qa.sh api 会自动两种模式各跑一遍）")
     r = anon.get("/api/auth/me")
     assert r.status_code == 401 and code(r) == "unauthorized", r.text[:200]
     j = r.json()

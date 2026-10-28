@@ -112,7 +112,8 @@ flowchart LR
 - **会话**：后端下发 httpOnly + SameSite=Lax 的 `zm_access`（30 分钟）/`zm_refresh`（30 天，每次刷新轮换并检测重放）两个 cookie，
   浏览器脚本拿不到 token；前端经同源 `/api` 代理调用，`access` 过期时自动刷新一次。登出会吊销当前会话；改密码让其他设备全部下线。
 - **密码**：argon2id 哈希存储，任何接口都不返回；8–64 位且同时含字母和数字、不能等于用户名、不能是常见弱密码。
-  登录失败同一 IP + 账号 15 分钟 5 次锁 5 分钟（429，`Retry-After`），同 IP 每小时最多注册 10 个账号。
+  登录失败同一 IP + 账号 15 分钟 5 次锁 5 分钟、同一 IP 15 分钟 20 次锁 15 分钟、同一账号（与 IP 无关）15 分钟 10 次锁 15 分钟（均为 429 + `Retry-After`）；
+  同 IP 每小时最多注册 10 个账号，全站每小时 200 个。客户端 IP 的来源见下文「客户端 IP 与反向代理」。
 - **数据隔离**：世界及其回合、记忆、事件、资产、海报、导出、举报都按世界的 `owner_id` 归属；访问别人的资源一律 **404**（不暴露是否存在）。
   导入存档得到的是归导入者所有的新世界。
 - **匿名/演示账号**：Docker 交付默认 `ZM_AUTH_REQUIRED=1`，必须注册/登录才能创建和游玩世界；代码内默认 `0`（过渡期、旧 e2e）时未登录请求按演示账号 `demo` 处理，原有演示流程不登录也能走通；
@@ -188,11 +189,14 @@ pnpm dev            # http://localhost:3000
 | `ZM_ACCESS_TTL_MIN` / `ZM_REFRESH_TTL_DAYS` | `30` / `30` | access / refresh 会话有效期 |
 | `ZM_COOKIE_SECURE` | `0` | `1` = cookie 带 Secure（仅 https）；本地 http 保持 0 |
 | `ZM_CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | 来源白名单：CORS（带凭据，不能用 `*`）+ 写接口 Origin 校验。用其它域名/IP/端口访问前端时必须加入 |
-| `ZM_TRUSTED_PROXIES` | 代码内 `127.0.0.1/32,::1`；compose 另加私网段 `172.16.0.0/12,10.0.0.0/8,192.168.0.0/16` | 只有请求来自这些网段（即前端 Next 代理）时才采信 `X-Forwarded-For`，用于登录/注册限流；来自其它地址时一律按对端地址。已知限制见 TEAM.md AUTH-QA-3 |
+| `ZM_TRUSTED_PROXIES` | 代码内 `127.0.0.1/32,::1`；compose 为 `127.0.0.1/32,::1,${ZM_FRONTEND_IP}/32`（只信前端容器固定 IP） | 只有请求来自这些地址（即前端 Next 代理）时才采信 `X-Forwarded-For`，用于登录/注册限流；来自其它地址时一律按对端地址 |
 | `ZM_PROXY_HOPS` | `1` | 对端可信时只取 `X-Forwarded-For` **从右数第 N 项**作为客户端 IP（不再往左回溯，左边可伪造）；前面有几层可信代理就设几。条目不够或可信代理没传 XFF/`X-Real-IP` 时客户端 IP 记为「未知」：按 IP 的限流不生效，只靠按账号上限与全站注册上限，首个此类请求打一条 WARNING |
 | `ZM_LOGIN_ACCOUNT_MAX_FAILS` / `ZM_LOGIN_ACCOUNT_WINDOW_MIN` / `ZM_LOGIN_ACCOUNT_LOCK_MIN` | `10` / `15` / `15` | 按账号（与 IP 无关）的登录失败上限：同一账号窗口内失败 N 次锁定 M 分钟（429 + `Retry-After`，锁定期正确密码也 429）。用户名/邮箱登录合并计数；登录成功不清零；不存在的用户名同样计数且响应一致 |
 | `ZM_REGISTER_GLOBAL_PER_HOUR` | `200` | 全站每小时注册上限（兜底，IP 未知时也生效） |
-| `ZM_TRUST_PROXY` | `1` | `0` = 完全不采信 `X-Forwarded-For`（一律按对端地址限流） |
+| `ZM_TRUST_PROXY`（后端） | `1` | `0` = 后端完全不采信 `X-Forwarded-For`（一律按对端地址限流） |
+| `ZM_FRONTEND_TRUST_PROXY` | `0` | 前端的 `ZM_TRUST_PROXY`（compose / dev.sh 以此名单独传给前端，避免与后端同名变量混用）。`0` = 前端丢弃客户端带来的 XFF 等头、只写 TCP 来源地址；`1` = 采信上游 `X-Forwarded-For` 的最后一跳，**仅在前端前面有自己的反向代理且前端端口不对外开放时**使用 |
+| `ZM_NET_SUBNET` / `ZM_FRONTEND_IP` | `172.30.53.0/24` / `172.30.53.10` | compose 网络固定子网与前端容器固定 IP（后端据此精确信任前端）；与宿主网段冲突时两者一起改 |
+| `FRONTEND_BIND` / `BACKEND_BIND` | `0.0.0.0` / `127.0.0.1` | Docker 端口绑定地址；有前置反向代理时把 `FRONTEND_BIND` 设为 `127.0.0.1` |
 | `ZM_AVATAR_MAX_BYTES` / `ZM_REGISTER_PER_HOUR` | `2097152` / `10` | 头像大小上限 / 同 IP 每小时注册上限（IP 未知时不适用） |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
@@ -231,6 +235,8 @@ ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tes
 ZM_FORCE_FALLBACK=1 ZM_DISABLE_IMAGE=1 backend/.venv/bin/python -m pytest backend/tests/integration/test_auth.py -q
 ZM_AUTH_REQUIRED=1 ZM_FORCE_FALLBACK=1 ZM_DISABLE_IMAGE=1 backend/.venv/bin/python -m pytest backend/tests/integration -q  # 强制登录模式全套
 cd tests/e2e && pnpm exec playwright test auth.spec.ts      # E2E 账号流程（需应用已运行）
+cd frontend && pnpm test:client-ip                         # 前端 client-ip-guard：伪造 XFF/X-Real-IP/Forwarded 到不了后端
+python3 scripts/qa_xff_probe.py --web http://127.0.0.1:3000 [--api http://127.0.0.1:8000]  # 经前端代理实测伪造 XFF 绕不过限流（会触发锁定，只在测试环境跑）
 ```
 
 所有测试一律兜底模式（`ZM_FORCE_FALLBACK=1`）+ `ZM_DISABLE_IMAGE=1`，不调用真实生图、配音和大模型。
@@ -311,16 +317,35 @@ docker compose down               # 停止（数据保留在命名卷中）；do
 - 成本：compose 默认 `ZM_DISABLE_IMAGE=1`（插画用占位 SVG，不调用百炼生图）；需要真实插画时在 `.env` 设 `ZM_DISABLE_IMAGE=0`。
 - 后端端口：默认只绑定 `127.0.0.1`（`BACKEND_BIND`，默认 `127.0.0.1`），浏览器只需访问前端，`/api` 经内部网络代理。原因：后端信任私网段转发的
   `X-Forwarded-For`，若把 8000 对外开放，外部可直接伪造来源 IP 绕过登录限流。本机 `curl http://127.0.0.1:8000/api/health` 与 E2E 的直连请求不受影响；
-  确需对外暴露后端时设 `BACKEND_BIND=0.0.0.0`，并把 `ZM_TRUSTED_PROXIES` 收窄到前端容器所在网段。
+  确需对外暴露后端时设 `BACKEND_BIND=0.0.0.0`（`ZM_TRUSTED_PROXIES` 默认已只含前端容器 IP，经宿主端口直连后端时 XFF 不被采信）。
 - 健康检查：两个镜像都用自带运行时（Python urllib / Node fetch）检查，构建不再 apt 安装 curl（不依赖 Debian 镜像源）。
 - 镜像标签：`ZM_IMAGE_TAG`（默认 `latest`）。同机并行验证分支时可用 `ZM_IMAGE_TAG=auth docker compose -p zhimeng-auth ...`，避免覆盖主线镜像与数据卷
   （注意网络名 `zhimeng_net` / 网桥 `zm-br0` 固定，两套 compose 不能同时运行）。
 - 注意：compose 会用**当前 shell 环境**里的 `DASHSCOPE_API_KEY` 插值（优先于 `.env`）。想以兜底模式验证时用 `env -u DASHSCOPE_API_KEY docker compose up -d`。
-- 对容器跑 E2E（以 `FRONTEND_PORT=3140 BACKEND_PORT=8140` 为例）：`cd tests/e2e && ZM_WEB=http://localhost:3140 ZM_API=http://localhost:8140 pnpm exec playwright test --project=ac`
+- 对容器跑 E2E（以 `FRONTEND_PORT=3140 BACKEND_PORT=8140` 为例）：`cd tests/e2e && ZM_WEB=http://localhost:3140 ZM_API=http://localhost:3140 pnpm exec playwright test --project=ac`
+  （`ZM_API` 的主机名必须与 `ZM_WEB` 相同，否则登录 cookie 带不过去，API 断言会得到 401）
   —— global-setup 检测到 `auth_required` 后自动注册 QA 用户，AC-1~AC-9 以登录身份运行，`auth.spec.ts` 从未登录状态开始。
 - 端口冲突：如本机已用 `scripts/dev.sh` 占用 3000/8000，先 `scripts/stop.sh`（只按端口停进程），或在 `.env` 改 `FRONTEND_PORT` / `BACKEND_PORT`。
 - 排障：若前端 `/api/*` 超时而 `curl localhost:8000/api/health` 正常，说明容器间流量被宿主防火墙拦截（例如宿主残留 `iptables-legacy` 的 `FORWARD DROP`）。
   compose 固定网桥名为 `zm-br0`，可放行：`sudo iptables-legacy -I DOCKER-USER -i zm-br0 -o zm-br0 -j ACCEPT`（本开发机即属此情况）。
+
+### 客户端 IP 与反向代理（AUTH-QA-3）
+
+登录/注册限流需要可信的客户端 IP。链路：浏览器 →（可选：你自己的反向代理）→ 前端 Next →（compose 内网）→ 后端。
+
+- **前端 client-ip-guard**：`frontend/scripts/client-ip-guard.cjs` 以 Node 预加载方式装在前端 HTTP 服务器上（`pnpm dev` / `pnpm start` / `scripts/dev.sh` /
+  前端镜像 `CMD node --require ./client-ip-guard.cjs server.js` 都会加载）。它在 Next 处理请求前删掉客户端带来的 `X-Forwarded-For`、`X-Real-IP`、`Forwarded`、
+  `CF-Connecting-IP` 等头，只写入一个 `X-Forwarded-For: <TCP 来源地址>`；仅当前端的 `ZM_TRUST_PROXY=1`（compose 用 `ZM_FRONTEND_TRUST_PROXY=1` 传入）时改用上游
+  `X-Forwarded-For` 的**最后一跳**。验证：`cd frontend && pnpm test:client-ip`。
+- **后端**只信任 `ZM_TRUSTED_PROXIES`（compose 默认 = 前端容器固定 IP）发来的 XFF，且只取从右数第 `ZM_PROXY_HOPS`（1）项；直连后端时一律按对端地址。
+- **直接 `docker compose up` 的局限**：宿主端口经 Docker 转发进容器，前端看到的 TCP 来源通常是 Docker 网关（如 `172.30.53.1`），所有访问者共享一个 IP 的额度：
+  同一来源 15 分钟累计 20 次登录失败（任何账号、包括不存在的用户名）会让**所有人**被锁 15 分钟；全站每小时只能注册 10 个账号。
+  本机演示、内网试用可以接受；**对外部署请在前面放反向代理**：
+  1. nginx/caddy 终止 https，并用真实来源覆盖 XFF（nginx：`proxy_set_header X-Forwarded-For $remote_addr;`，不要用 `$proxy_add_x_forwarded_for`）；
+  2. `.env` 设 `ZM_FRONTEND_TRUST_PROXY=1`、`FRONTEND_BIND=127.0.0.1`（前端端口只给反代访问，否则外部可直接伪造最后一跳）、`ZM_COOKIE_SECURE=1`，并把站点地址加入 `ZM_CORS_ORIGINS`；
+  3. 反代与 compose 不在同一宿主或经过多层代理时，按层数设置后端 `ZM_PROXY_HOPS` 并相应调整 `ZM_TRUSTED_PROXIES`。
+  另一种做法是 dockerd 设置 `"userland-proxy": false`（iptables DNAT 保留外部来源地址；本机回环访问仍显示为网关）。
+- 按账号上限（10 次 / 15 分钟）与 IP 无关，无论部署方式都生效。
 
 ## 实际取舍
 
