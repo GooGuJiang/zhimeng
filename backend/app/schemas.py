@@ -109,6 +109,9 @@ class World(BaseModel):
     detail_status: Literal["enriching", "complete", "local"] = "complete"
     # 生成该世界的原始请求（GenerateWorldRequest 字段，不含 wait_details；含最近一次 regenerate 的 refine）
     gen_request: dict[str, Any] | None = None
+    # v1.4：归属用户（只读；以 worlds.owner_id 列为准）与来源
+    owner_id: str = ""
+    origin: Literal["generated", "imported"] = "generated"
     ai_generated: bool = True
     ai_label: str = AI_LABEL
 
@@ -132,6 +135,7 @@ class WorldSummary(BaseModel):
     status: str
     created_at: str
     updated_at: str
+    owner_id: str = ""  # v1.4
 
 
 class GenerateWorldRequest(BaseModel):

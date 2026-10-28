@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app import multimodal
 from app.db import AssetRow, SummaryRow, TrajectoryRow, TurnRow, session_scope
 from app.memory import store
-from app.routes.deps import world_or_404
+from app.routes.deps import owner_prefs, world_or_404
 from app.schemas import AI_LABEL, World
 from app.services import guard, repo
 
@@ -60,6 +60,10 @@ async def import_save(save: dict[str, Any] = Body(...)):
         world = World.model_validate(save["world"])
     except (KeyError, ValidationError) as e:
         raise HTTPException(400, f"存档中的世界数据无效：{e}") from e
+    # v1.4：导入者成为新世界的 owner（存档里的 owner_id 一律忽略）；未成年人模式按导入者偏好取下限
+    from app.auth.prefs import effective
+    world.minor_mode, world.rating = effective(world.minor_mode, world.rating, owner_prefs())  # type: ignore[assignment]
+    world.owner_id, world.origin = "", "imported"
     # 导入的文本同样需过安全审核（存档可被手工编辑）
     v = await guard.check_input(f"{world.title}\n{world.setting}\n{world.opening_scene}", minor_mode=world.minor_mode,
                                 rating=world.rating, context="source_text")

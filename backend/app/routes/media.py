@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app import multimodal
-from app.routes.deps import world_or_404
+from app.routes.deps import owns, world_or_404
 from app.schemas import Asset, IllustrationRequest, TTSRequest
 from app.services import assets as A
 from app.services import guard, repo
@@ -55,6 +55,7 @@ async def tts(world_id: str, body: TTSRequest):
 
 @router.post("/assets/{asset_id}/regenerate", response_model=Asset)
 async def regenerate(asset_id: str):
+    _asset_or_404(asset_id)
     a = await multimodal.regenerate(asset_id, deadline=DEADLINE_S)
     if not a:
         raise HTTPException(404, "资源不存在")
@@ -63,7 +64,19 @@ async def regenerate(asset_id: str):
 
 @router.get("/assets/{asset_id}", response_model=Asset)
 async def get_asset(asset_id: str, wait: float = Query(0, ge=0, description="长轮询秒数（上限 8）：占位升级完成即返回")):
+    _asset_or_404(asset_id)
     a = await A.wait(asset_id, wait) if wait else A.get(asset_id)
     if not a:
         raise HTTPException(404, "资源不存在")
     return a
+
+
+def _asset_or_404(asset_id: str) -> None:
+    """v1.4：资产归属经其 world 判断；别人的资产与不存在一样返回 404。"""
+    from app.db import AssetRow, session_scope
+
+    with session_scope() as s:
+        row = s.get(AssetRow, asset_id)
+        wid = row.world_id if row else None
+    if not wid or not owns(repo.world_owner(wid)):
+        raise HTTPException(404, "资源不存在")

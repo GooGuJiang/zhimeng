@@ -45,5 +45,6 @@ async def events(world_id: str, type: str | None = None, limit: int = Query(50, 
 @router.post("/worlds/{world_id}/events/seen")
 async def events_seen(world_id: str, body: SeenRequest):
     world_or_404(world_id)
-    repo.mark_events(body.ids, seen=True)
+    want = set(body.ids)  # v1.4：只标记本世界的事件（防止按 id 改别人的世界）
+    repo.mark_events([e.id for e in repo.list_events(world_id, limit=100_000) if e.id in want], seen=True)
     return {"ok": True}

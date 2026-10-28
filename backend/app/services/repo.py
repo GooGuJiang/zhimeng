@@ -21,15 +21,26 @@ def iso(d: datetime) -> str:
 
 
 # ---------------------------------------------------------------- worlds
+def _owner_for_new(world: World) -> str:
+    from app.auth.context import DEMO_ID, current_owner_id
+
+    return current_owner_id() or world.owner_id or DEMO_ID
+
+
 def save_world(world: World) -> World:
+    """新建行：owner_id = 当前请求身份（无请求上下文 → world.owner_id / demo）；已有行：归属与来源不变。"""
     now = iso(utcnow())
     world.updated_at = now
     world.created_at = world.created_at or now
     with session_scope() as s:
         row = s.get(WorldRow, world.id)
-        data = world.model_dump(mode="json")
         if row is None:
-            row = WorldRow(id=world.id, title=world.title, data=data)
+            world.owner_id = _owner_for_new(world)
+            row = WorldRow(id=world.id, title=world.title, data={}, owner_id=world.owner_id, origin=world.origin)
+        else:
+            world.owner_id = row.owner_id or world.owner_id
+            world.origin = (row.origin or "generated")  # type: ignore[assignment]
+        data = world.model_dump(mode="json")
         row.title, row.genre, row.tone, row.mode, row.status = world.title, world.genre, world.tone, world.mode, world.status
         row.data = data
         row.updated_at = utcnow()
@@ -50,15 +61,35 @@ def load_world(world_id: str) -> World | None:
         w = World.model_validate(row.data)
         if w.gen_request is None and w.state.flags.get("gen_request"):  # 旧存档：从 flags 回填正式字段
             w.gen_request = w.state.flags["gen_request"]
+        w.owner_id = row.owner_id or ""
+        w.origin = (row.origin or "generated")  # type: ignore[assignment]
+        # v1.4：归属用户的偏好开启了未成年人模式 → 读取时收紧（回合/生成审核都用收紧后的值；下次保存写回）
+        if row.owner_id:
+            from app.auth.prefs import effective
+            from app.db import UserRow
+            u = s.get(UserRow, row.owner_id)
+            if u and (u.preferences or {}).get("minor_mode"):
+                w.minor_mode, w.rating = effective(w.minor_mode, w.rating, u.preferences)  # type: ignore[assignment]
         return w
 
 
-def list_worlds() -> list[WorldSummary]:
+def world_owner(world_id: str) -> str | None:
     with session_scope() as s:
-        rows = s.exec(select(WorldRow).order_by(col(WorldRow.updated_at).desc())).all()
+        row = s.get(WorldRow, world_id)
+        return (row.owner_id or "") if row else None
+
+
+def list_worlds(owner_id: str | None = None) -> list[WorldSummary]:
+    """owner_id=None → 全部（仅内部使用，如启动时恢复补全）；接口层总是传当前用户。"""
+    with session_scope() as s:
+        q = select(WorldRow)
+        if owner_id is not None:
+            q = q.where(WorldRow.owner_id == owner_id)
+        rows = s.exec(q.order_by(col(WorldRow.updated_at).desc())).all()
         return [WorldSummary(id=r.id, title=r.title, genre=r.genre, tone=r.tone, mode=r.mode,  # type: ignore[arg-type]
                              turn=(r.data or {}).get("state", {}).get("turn", 0), status=r.status,
-                             created_at=iso(r.created_at), updated_at=iso(r.updated_at)) for r in rows]
+                             created_at=iso(r.created_at), updated_at=iso(r.updated_at),
+                             owner_id=r.owner_id or "") for r in rows]
 
 
 def delete_world(world_id: str) -> bool:

@@ -16,6 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.auth.errors import AuthError
+from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
 from app.db import get_engine
 
@@ -24,7 +26,7 @@ log = logging.getLogger("zhimeng")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # 路由模块（按功能拆分）；缺失的模块跳过，保证入口始终可导入
-ROUTE_MODULES = ["worlds", "play", "memory", "god", "media", "ui", "safety", "education", "save"]
+ROUTE_MODULES = ["worlds", "play", "memory", "god", "media", "ui", "safety", "education", "save", "auth", "users", "debug"]
 
 
 @asynccontextmanager
@@ -45,13 +47,23 @@ async def lifespan(_: FastAPI):
 
 settings = get_settings()
 app = FastAPI(title="织梦 Zhimeng API", version=VERSION, lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-                   allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# v1.4：AuthMiddleware 在内层（每个请求含 SSE 流都带身份上下文）；CORS 在最外层，401/403 也带 CORS 头。
+# allow_credentials=True 时来源必须明确列出（cors_list 已过滤 "*"）。
+app.add_middleware(AuthMiddleware)
+app.add_middleware(CORSMiddleware, allow_origins=settings.cors_list, allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"], expose_headers=["X-ZM-Clamped", "Retry-After"])
+
+
+@app.exception_handler(AuthError)
+async def _auth_error(_: Request, exc: AuthError):
+    return exc.response()
 
 
 @app.exception_handler(HTTPException)
 async def _http_error(_: Request, exc: HTTPException):
-    code = {400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict", 422: "validation_error"}.get(exc.status_code, "error")
+    code = {400: "bad_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "conflict",
+            413: "file_too_large", 415: "unsupported_media_type", 422: "validation_error",
+            429: "rate_limited"}.get(exc.status_code, "error")
     return JSONResponse({"detail": exc.detail, "code": code}, status_code=exc.status_code)
 
 
@@ -72,7 +84,8 @@ async def health():
             "models": {"chat": s.chat_model, "fast": s.fast_model, "embedding": s.embedding_model,
                        "image": s.image_model, "tts": s.tts_model,
                        "skeleton": s.skeleton_model, "chat_chain": s.chat_model_chain.split(","),
-                       "fast_chain": s.fast_model_chain.split(",")}, "version": VERSION}
+                       "fast_chain": s.fast_model_chain.split(",")},
+            "auth": {"required": bool(s.zm_auth_required)}, "version": VERSION}
 
 
 for _name in ROUTE_MODULES:
@@ -92,6 +105,15 @@ class AssetFiles(StaticFiles):
         return super().lookup_path(path)
 
 
+class AvatarFiles(StaticFiles):
+    """v1.4 用户头像：/api/static/avatars/<user_id>_<rand>.webp（文件名不可猜测，不鉴权，便于 <img> 直接引用）。"""
+
+    def lookup_path(self, path: str):
+        self.all_directories = [str(get_settings().avatars_dir)]
+        return super().lookup_path(path)
+
+
 # 静态资源：契约路径 /api/static/assets；/static/assets 作为兼容别名（前端代理两者均可）
+app.mount("/api/static/avatars", AvatarFiles(directory=str(settings.avatars_dir), check_dir=False), name="avatars")
 app.mount("/api/static/assets", AssetFiles(directory=str(settings.assets_dir), check_dir=False), name="assets")
 app.mount("/static/assets", AssetFiles(directory=str(settings.assets_dir), check_dir=False), name="assets_compat")

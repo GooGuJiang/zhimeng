@@ -10,7 +10,7 @@ from app.agents import director
 from app.agents.world_builder import generate_world_events
 from app.config import get_settings
 from app.llm.client import llm_enabled
-from app.routes.deps import world_or_404
+from app.routes.deps import apply_prefs, world_or_404
 from app.schemas import AI_LABEL, EducationGenerateRequest, GenerateWorldRequest, KnowledgeCard
 from app.services import repo
 from app.services.sse import sse_response
@@ -20,6 +20,7 @@ router = APIRouter(tags=["education"])
 
 @router.post("/education/generate")
 async def generate(body: EducationGenerateRequest):
+    body = apply_prefs(body, minor_default=True)  # v1.4：年级/学科取偏好默认值；未成年人模式取下限
     first = body.source_text.strip().splitlines()[0][:40] if body.source_text.strip() else ""
     req = GenerateWorldRequest(prompt=body.title or first, mode="education", source_text=body.source_text,
                                minor_mode=body.minor_mode, rating="all" if body.minor_mode else "teen",
@@ -59,10 +60,12 @@ async def summary(world_id: str):
 
     cached = _EDU_CACHE.get(world_id)
     if cached and cached[0] == n:
+        await _persist(world_id, cached[1], len(turns))
         return shape(cached[1], "complete")
     if not llm_enabled() or not w.knowledge_cards:
         s = await director.education_summary(w, timeline, use_llm=False)
         _EDU_CACHE[world_id] = (n, s)
+        await _persist(world_id, s, len(turns))
         return shape(s, "complete")
     job = _EDU_JOBS.get(world_id)
     if job is None or job.done():
@@ -76,6 +79,44 @@ async def summary(world_id: str):
     done, _ = await asyncio.wait({job}, timeout=get_settings().sync_llm_timeout_s)
     if job in done and not job.exception():
         res = job.result()
+        await _persist(world_id, res, len(turns))
         return shape(res, "complete")
     s = await director.education_summary(w, timeline, use_llm=False)
     return shape(s, "pending")
+
+_PERSIST_BG: set[asyncio.Task] = set()
+
+
+async def _persist(world_id: str, s: dict[str, Any], turn_count: int) -> None:
+    """世界锁空闲 → 立即写；正被回合占用 → 后台写（不让小结请求等回合结束）。"""
+    from app.graph.turn_graph import world_lock
+
+    if world_lock(world_id).locked():
+        t = asyncio.create_task(_persist_now(world_id, s, turn_count))
+        _PERSIST_BG.add(t)
+        t.add_done_callback(_PERSIST_BG.discard)
+        return
+    await _persist_now(world_id, s, turn_count)
+
+
+async def _persist_now(world_id: str, s: dict[str, Any], turn_count: int) -> None:
+    """v1.4：把最近一次 complete 的学习小结持久化到 state.flags.edu_summary（个人中心 / 学习记录用）；没变化不写。"""
+    from datetime import datetime, timezone
+
+    from app.graph.turn_graph import world_lock
+
+    rec = {"key_points": list(s.get("key_points") or []), "reflection": s.get("reflection") or "",
+           "source": s.get("source", "fallback"), "turn_count": turn_count}
+    try:
+        async with world_lock(world_id):
+            w = repo.load_world(world_id)
+            if not w:
+                return
+            old = w.state.flags.get("edu_summary") or {}
+            if {k: old.get(k) for k in rec} == rec:
+                return
+            w.state.flags["edu_summary"] = {**rec, "generated_at": datetime.now(timezone.utc).isoformat()}
+            repo.save_world(w)
+    except Exception:  # noqa: BLE001 - 持久化失败不影响小结返回
+        import logging
+        logging.getLogger("zhimeng").exception("persist edu_summary failed")

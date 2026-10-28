@@ -26,15 +26,23 @@ async def policy():
 
 @router.post("/reports")
 async def report(body: ReportRequest):
+    from app.auth.context import current_identity
+    from app.routes.deps import world_or_404
+
+    if body.world_id:
+        world_or_404(body.world_id)  # v1.4：只能举报自己世界里的内容（别人的世界 404）
+    ident = current_identity()
+    reporter = ident.owner_id if ident else None
     if hasattr(sf, "create_report"):
         r = sf.create_report(body.content, body.reason, world_id=body.world_id, turn_id=body.turn_id)
+        _set_reporter(r["id"], reporter)
         return {"id": r["id"], "status": r.get("status", "received"), "created_at": r["created_at"],
                 **({"priority": r["priority"]} if "priority" in r else {})}
     import uuid
 
     from app.db import ReportRow, session_scope
     row = ReportRow(id=f"rep_{uuid.uuid4().hex[:12]}", world_id=body.world_id, turn_id=body.turn_id,
-                    content=body.content, reason=body.reason)
+                    content=body.content, reason=body.reason, reporter_id=reporter)
     with session_scope() as s:
         s.add(row)
     return {"id": row.id, "status": "received", "created_at": row.created_at.isoformat()}
@@ -43,6 +51,9 @@ async def report(body: ReportRequest):
 @router.get("/reports")
 async def reports(world_id: str | None = None, x_admin_token: str | None = Header(default=None)):
     """按世界查看举报（world_id 必填）；全量列表需 X-Admin-Token == 环境变量 ZM_ADMIN_TOKEN（未设置则禁用全量）。"""
+    if world_id:
+        from app.routes.deps import world_or_404
+        world_or_404(world_id)
     if not world_id:
         admin = get_settings().zm_admin_token
         if not admin or not x_admin_token or not hmac.compare_digest(admin, x_admin_token):
@@ -57,3 +68,14 @@ async def reports(world_id: str | None = None, x_admin_token: str | None = Heade
         if world_id:
             q = q.where(ReportRow.world_id == world_id)
         return [r.model_dump(mode="json") for r in s.exec(q).all()]
+
+
+def _set_reporter(report_id: str, reporter: str | None) -> None:
+    if not reporter:
+        return
+    from app.db import ReportRow, session_scope
+    with session_scope() as s:
+        row = s.get(ReportRow, report_id)
+        if row:
+            row.reporter_id = reporter
+            s.add(row)

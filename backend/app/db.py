@@ -20,6 +20,8 @@ class WorldRow(SQLModel, table=True):
     __tablename__ = "worlds"
     id: str = Field(primary_key=True)
     title: str
+    owner_id: str | None = Field(default=None, index=True)  # v1.4：归属用户（子表经 world_id 继承）
+    origin: str = "generated"                                # generated | imported
     genre: str = ""
     tone: str = ""
     mode: str = "story"
@@ -150,7 +152,59 @@ class ReportRow(SQLModel, table=True):
     content: str
     reason: str
     status: str = "received"
+    reporter_id: str | None = None  # v1.4：举报人
     created_at: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------- v1.4 用户系统
+class UserRow(SQLModel, table=True):
+    __tablename__ = "users"
+    id: str = Field(primary_key=True)
+    username: str
+    username_lower: str = Field(index=True, unique=True)
+    email: str | None = Field(default=None, index=True, unique=True)  # 选填，存小写；NULL 可重复
+    password_hash: str
+    nickname: str = ""
+    avatar_url: str | None = None
+    bio: str = ""
+    preferences: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    is_demo: bool = False
+    token_version: int = 1
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    last_login_at: datetime | None = None
+
+
+class AuthSessionRow(SQLModel, table=True):
+    """一次登录 = 一个 refresh family；登出/重放检测吊销整串（该会话的 access 也随之失效）。"""
+    __tablename__ = "auth_sessions"
+    id: str = Field(primary_key=True)  # family id
+    user_id: str = Field(index=True)
+    remember: bool = True
+    user_agent: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    revoked_at: datetime | None = None
+
+
+class RefreshTokenRow(SQLModel, table=True):
+    __tablename__ = "refresh_tokens"
+    jti: str = Field(primary_key=True)
+    family_id: str = Field(index=True)
+    user_id: str = Field(index=True)
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    replaced_by: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AuthEventRow(SQLModel, table=True):
+    """限流记录：login_fail / pwd_fail / register / refresh（按 key + 时间窗计数）。"""
+    __tablename__ = "auth_events"
+    id: int | None = Field(default=None, primary_key=True)
+    kind: str = Field(index=True)
+    key: str = Field(index=True)
+    ip: str = Field(default="", index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 _engine = None
@@ -176,7 +230,10 @@ def get_engine():
 
 # 轻量迁移：给旧库补新增列（SQLite create_all 不会改已有表）
 _MIGRATIONS = {"turns": [("source", "VARCHAR DEFAULT 'llm'")],
-               "assets": [("version", "INTEGER DEFAULT 1"), ("updated_at", "DATETIME")], "events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")]}
+               "assets": [("version", "INTEGER DEFAULT 1"), ("updated_at", "DATETIME")], "events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")],
+               # v1.4 用户系统：数据归属
+               "worlds": [("owner_id", "VARCHAR"), ("origin", "VARCHAR DEFAULT 'generated'")],
+               "reports": [("reporter_id", "VARCHAR")]}
 
 
 def _migrate(engine) -> None:  # noqa: ANN001
@@ -187,6 +244,10 @@ def _migrate(engine) -> None:  # noqa: ANN001
             for name, ddl in cols:
                 if name not in have:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_worlds_owner_id ON worlds (owner_id)"))
+    # v1.4：建 demo 账号；旧数据（owner_id 为空）归 u_demo
+    from app.auth.bootstrap import bootstrap
+    bootstrap(engine)
 
 
 def reset_engine() -> None:

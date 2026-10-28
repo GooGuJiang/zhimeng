@@ -26,6 +26,19 @@ class Settings(BaseSettings):
     skeleton_model_chain: str = "qwen-flash,qwen-turbo,qwen-plus"
     # GET /api/reports 不带 world_id 的全量列表需要请求头 X-Admin-Token 与之一致；未设置 → 全量列表禁用
     zm_admin_token: str = ""
+    # ---- 用户系统（feat/auth，API v1.4）：均可用同名大写环境变量覆盖 ----
+    zm_auth_required: bool = False      # ZM_AUTH_REQUIRED=1 → 匿名访问受保护接口 401；0 → 匿名 = 演示账号 u_demo
+    zm_jwt_secret: str = ""             # 缺省自动生成并持久化到 $ZM_DATA_DIR/jwt_secret（0600）
+    zm_access_ttl_min: int = 30
+    zm_refresh_ttl_days: int = 30
+    zm_cookie_secure: bool = False
+    zm_demo_password: str = ""          # 缺省随机生成并写入 $ZM_DATA_DIR/demo_password.txt（0600），绝不打印
+    zm_trust_proxy: bool = True         # 兼容旧开关：0 = 完全不采信 X-Forwarded-For / X-Real-IP
+    # 可信代理网段（逗号分隔，支持 CIDR）：只有对端在其中才采信 XFF/X-Real-IP，并从右往左取第一个不可信地址。
+    # Docker 部署（前端容器经内部网络代理）建议：127.0.0.1/32,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+    zm_trusted_proxies: str = "127.0.0.1/32,::1"
+    zm_avatar_max_bytes: int = 2 * 1024 * 1024
+    zm_register_per_hour: int = 10      # 同 IP 每小时注册上限
     # 实时回合延迟预算（首字 ≤2s 目标）：叙事前的世界/角色 Agent 与记忆向量检索超时即用本地规则，不拖慢旁白
     agent_budget_s: float = 2.0
     retrieval_budget_s: float = 1.2
@@ -69,6 +82,15 @@ class Settings(BaseSettings):
         return self.data_dir / "assets"
 
     @property
+    def avatars_dir(self) -> Path:
+        return self.data_dir / "avatars"
+
+    @property
+    def cors_list(self) -> list[str]:
+        """CORS 来源白名单（allow_credentials=True 时不允许 "*"，因此过滤掉）。"""
+        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip() and o.strip() != "*"]
+
+    @property
     def chroma_dir(self) -> Path:
         return self.data_dir / "chroma"
 
@@ -88,8 +110,11 @@ def get_settings() -> Settings:
         s.force_fallback = True
     if os.getenv("ZM_DISABLE_IMAGE", "").lower() in {"1", "true", "yes"}:
         s.disable_image = True
+    if os.getenv("ZM_CORS_ORIGINS"):
+        s.cors_origins = os.environ["ZM_CORS_ORIGINS"]
     if os.getenv("ZM_DATA_DIR"):
         s.data_dir = Path(os.environ["ZM_DATA_DIR"])
     s.data_dir.mkdir(parents=True, exist_ok=True)
     s.assets_dir.mkdir(parents=True, exist_ok=True)
+    s.avatars_dir.mkdir(parents=True, exist_ok=True)
     return s
