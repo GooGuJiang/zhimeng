@@ -82,25 +82,39 @@ def trusted(ip) -> bool:  # noqa: ANN001
     return any(ip.version == n.version and ip in n for n in _networks(s.zm_trusted_proxies))
 
 
-def client_ip(scope, headers: dict[str, str]) -> str:  # noqa: ANN001
-    """对端在 ZM_TRUSTED_PROXIES 内 → 采信 X-Forwarded-For（从右往左第一个不可信地址；全可信取最左）或 X-Real-IP；
-    否则一律用对端地址（忽略伪造的 XFF）。限流与注册频率都按这里的结果计算。"""
+_warned_no_xff = False
+
+
+def client_ip(scope, headers: dict[str, str]) -> str | None:  # noqa: ANN001
+    """客户端 IP；``None`` = 未知（AUTH-QA-3）。
+
+    - 对端不在 ZM_TRUSTED_PROXIES → 对端地址（客户端带的 XFF / X-Real-IP 一律忽略）。
+    - 对端可信 → 只取 X-Forwarded-For **从右数第 ZM_PROXY_HOPS 项**（默认 1 = 最右边，即我方代理追加/覆盖的那一跳），
+      不再往左回溯（左边的条目客户端可以伪造）；条目不够或无法解析 → 未知。没有 XFF 时取 X-Real-IP。
+    - 对端可信但两者都没有 → 未知：按单 IP 的规则不对它生效，只靠按账号上限与全站注册上限兜底；首次出现时告警一次。
+    """
+    global _warned_no_xff
     peer_raw = (scope.get("client") or ("", 0))[0] or ""
     peer = _ip(peer_raw)
     if not trusted(peer):
         return str(peer) if peer else (peer_raw or "unknown")
-    chain = [x for x in headers.get("x-forwarded-for", "").split(",") if x.strip()]
+    chain = [x.strip() for x in headers.get("x-forwarded-for", "").split(",") if x.strip()]
     if chain:
-        ips = [_ip(x) for x in chain]
-        for ip in reversed(ips):
-            if ip is None:
-                break  # 无法解析的条目：不再往左信任
-            if not trusted(ip):
-                return str(ip)
-        first = next((ip for ip in ips if ip is not None), None)
-        return str(first) if first and all(ip is not None for ip in ips) else str(peer)
+        hops = max(1, get_settings().zm_proxy_hops)
+        if len(chain) < hops:
+            return None
+        ip = _ip(chain[-hops])
+        return str(ip) if ip else None
     real = _ip(headers.get("x-real-ip", ""))
-    return str(real) if real else str(peer)
+    if real:
+        return str(real)
+    if not _warned_no_xff:
+        _warned_no_xff = True
+        import logging
+        logging.getLogger("zhimeng.auth").warning(
+            "来自可信代理 %s 的请求没有 X-Forwarded-For / X-Real-IP：客户端 IP 未知，按 IP 的限流对这类请求不生效"
+            "（只剩按账号上限与全站注册上限）。请让前端代理用真实来源地址写 X-Forwarded-For。", peer)
+    return None
 
 
 def _origin_ok(origin: str, headers: dict[str, str]) -> bool:

@@ -20,8 +20,12 @@ from app.db import UserRow, session_scope
 router = APIRouter(tags=["auth"])
 
 
-def ip_of(request: Request) -> str:
-    return request.scope.get("state", {}).get("zm_ip") or (request.client.host if request.client else "unknown")
+def ip_of(request: Request) -> str | None:
+    """客户端 IP；None = 未知（可信代理没传 XFF，AUTH-QA-3）。"""
+    st = request.scope.get("state", {})
+    if "zm_ip" in st:
+        return st["zm_ip"]
+    return request.client.host if request.client else "unknown"
 
 
 def _with_cookies(body: dict[str, Any], status: int, access: str, refresh: str, remember: bool) -> JSONResponse:
@@ -48,13 +52,13 @@ async def register(request: Request, body: dict[str, Any] = Body(...)):
         raise AuthError(409, "username_taken", "用户名已被占用", field="username")
     if email and svc.email_taken(email):
         raise AuthError(409, "email_taken", "该邮箱已被注册", field="email")
-    rl.check_window("register", ip, max(1, get_settings().zm_register_per_hour), 3600, "注册太频繁")
+    rl.check_register(ip)
     from app.services.repo import new_id
     u = UserRow(id=new_id("u"), username=username, username_lower=username.lower(), email=email,
                 password_hash=sec.hash_password(pw), nickname=nickname, preferences=default_prefs())
     with session_scope() as s:
         s.add(u)
-    rl.record("register", ip, ip)
+    rl.record("register", ip or "", ip or "")
     access, refresh = svc.start_session(u, remember=True, user_agent=request.headers.get("user-agent", ""))
     return _with_cookies({"user": svc.user_out(svc.get_user(u.id))}, 201, access, refresh, True)
 
@@ -70,14 +74,16 @@ async def login(request: Request, body: dict[str, Any] = Body(...)):
         raise validation("password", "请输入密码")
     remember = body.get("remember", True)
     remember = remember if isinstance(remember, bool) else True
-    rl.check_login(ip, login_v)
     u = svc.find_login(login_v)
+    # 按账号计数（与 IP 无关）：存在的账号按 user id（用户名/邮箱两种登录方式合并计数），不存在的按规范化登录名
+    acct = f"user:{u.id}" if u else f"login:{login_v.strip().lower()}"
+    rl.check_login(ip, login_v, acct)
     if not u:
         sec.dummy_verify(pw)
     if not u or not sec.verify_password(u.password_hash, pw):
-        rl.login_failed(ip, login_v)
+        rl.login_failed(ip, login_v, acct)
         raise AuthError(401, "invalid_credentials", "用户名或密码错误")
-    rl.login_ok(ip, login_v)
+    rl.login_ok(ip, login_v)  # 只清 IP+账号计数；按账号计数不清零（防止攻击者用自己知道的密码重置）
     access, refresh = svc.start_session(u, remember=remember, user_agent=request.headers.get("user-agent", ""))
     return _with_cookies({"user": svc.user_out(svc.get_user(u.id))}, 200, access, refresh, remember)
 

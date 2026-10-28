@@ -246,7 +246,7 @@ def test_client_ip_resolution(core_env, monkeypatch):
     setenv(monkeypatch, ZM_TRUSTED_PROXIES="127.0.0.1/32,::1,172.16.0.0/12")
     ip = lambda peer, **h: client_ip({"client": (peer, 1)}, {k.replace("_", "-"): v for k, v in h.items()})  # noqa: E731
     assert ip("172.18.0.3", x_forwarded_for="198.51.100.9") == "198.51.100.9"          # 可信网段 → XFF
-    assert ip("172.18.0.3", x_forwarded_for="6.6.6.6, 198.51.100.9, 172.18.0.2") == "198.51.100.9"  # 右起第一个不可信
+    assert ip("172.18.0.3", x_forwarded_for="6.6.6.6, 198.51.100.9") == "198.51.100.9"  # 只取最右边一项（AUTH-QA-3）
     assert ip("172.18.0.3", x_real_ip="198.51.100.10") == "198.51.100.10"
     assert ip("203.0.113.5", x_forwarded_for="1.2.3.4") == "203.0.113.5"               # 不可信对端：忽略伪造 XFF
     assert ip("203.0.113.5", x_real_ip="1.2.3.4") == "203.0.113.5"

@@ -38,7 +38,14 @@ class Settings(BaseSettings):
     # Docker 部署（前端容器经内部网络代理）建议：127.0.0.1/32,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
     zm_trusted_proxies: str = "127.0.0.1/32,::1"
     zm_avatar_max_bytes: int = 2 * 1024 * 1024
-    zm_register_per_hour: int = 10      # 同 IP 每小时注册上限
+    zm_register_per_hour: int = 10      # 同 IP 每小时注册上限（客户端 IP 未知时不生效）
+    zm_register_global_per_hour: int = 200   # 全站每小时注册上限（兜底，AUTH-QA-3）
+    # 只按账号计数、与 IP 无关的登录失败上限（兜底，AUTH-QA-3）：窗口内失败 N 次 → 锁定；登录成功不清零
+    zm_login_account_max_fails: int = 10
+    zm_login_account_window_min: int = 15
+    zm_login_account_lock_min: int = 15
+    # 可信代理时取 XFF 从右数第 N 项（N = 我方可信代理的层数；默认 1 = 只取最右边那一跳）
+    zm_proxy_hops: int = 1
     # 实时回合延迟预算（首字 ≤2s 目标）：叙事前的世界/角色 Agent 与记忆向量检索超时即用本地规则，不拖慢旁白
     agent_budget_s: float = 2.0
     retrieval_budget_s: float = 1.2

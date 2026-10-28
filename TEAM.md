@@ -297,13 +297,24 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 
 `content_blocked` 为 400，detail 使用安全模块返回的 message。
 
-### 5. 限流（单进程内存实现，重启后清零）
-- **登录**：同一 IP 加同一 login（转小写），15 分钟内失败 5 次，锁 5 分钟。另外同一 IP 15 分钟内失败 20 次（不管用哪个 login），锁 15 分钟。登录成功会清零该 IP+login 的计数。
-- **注册**：同一 IP 每小时最多 10 次。
+### 5. 限流（记录在 auth_events 表，单进程；AUTH-QA-3 修订）
+- **客户端 IP**：
+  - 对端**不在** `ZM_TRUSTED_PROXIES`（逗号分隔，支持 CIDR，默认 `127.0.0.1/32,::1`）里：用对端地址，客户端带的 `X-Forwarded-For` / `X-Real-IP` 一律忽略。
+  - 对端可信：**只取 XFF 从右数第 `ZM_PROXY_HOPS` 项**（默认 1，即最右边那一跳，由我方代理追加或覆盖），不再往左逐级回溯，因为左边的条目客户端可以伪造。条目不够或无法解析时，视为「IP 未知」。没有 XFF 时取 `X-Real-IP`。
+  - 对端可信但 XFF 和 `X-Real-IP` 都没有：**客户端 IP 未知**。按 IP 的规则（下面标「IP」的几条）对这类请求不生效，只靠按账号上限和全站注册上限兜底。第一次出现时打一条 WARNING 日志，提示代理没有传 XFF（每个进程只打一次）。
+  - `ZM_TRUST_PROXY=0` 仍然兼容，表示完全不采信 XFF。
+- **登录**：
+  - 「IP」：同一 IP 加同一 login（转小写）15 分钟内失败 5 次，锁 5 分钟；登录成功会清零这一项。
+  - 「IP」：同一 IP 15 分钟内失败 20 次（不管用哪个 login），锁 15 分钟。
+  - **按账号兜底（与 IP 无关）**：同一账号 `ZM_LOGIN_ACCOUNT_WINDOW_MIN`（15）分钟内失败 `ZM_LOGIN_ACCOUNT_MAX_FAILS`（10）次，锁 `ZM_LOGIN_ACCOUNT_LOCK_MIN`（15）分钟。
+    - 计数单位：已存在的账号按 user id 计（用户名和邮箱两种登录方式合并计数）；不存在的用户名按规范化后的登录名计，响应和存在时完全一样。
+    - **登录成功不清零**，防止攻击者用自己知道的密码重置计数。
+  - 任何一条锁定期间，正确密码也返回 429。
+- **注册**：「IP」同一 IP 每小时 `ZM_REGISTER_PER_HOUR`（10）次；全站每小时 `ZM_REGISTER_GLOBAL_PER_HOUR`（200）次，IP 未知时也生效。
 - **修改密码**：同一用户输错当前密码 5 次，锁 5 分钟。
-- **refresh**：同一 IP 每分钟 60 次。
-- 被限流时返回 HTTP 429，带响应头 `Retry-After: <秒>`，响应体为 `{"detail":"尝试次数过多，请 4 分 32 秒后再试","code":"rate_limited","retry_after":272}`。锁定期内即使密码正确也返回 429。
-- **客户端 IP（AUTH-QA-1）**：默认取连接的对端地址。只有对端在 `ZM_TRUSTED_PROXIES`（逗号分隔，支持 CIDR，默认 `127.0.0.1/32,::1`）里，才采信 `X-Forwarded-For`：**从右往左**跳过可信地址，取第一个不可信的地址（全部可信则取最左）；没有 XFF 时采信 `X-Real-IP`。不可信对端带来的 XFF / X-Real-IP 一律忽略。`ZM_TRUST_PROXY=0` 仍然兼容，表示完全不采信。限流和注册频率都按解析后的 IP 计算。
+- **refresh**：「IP」同一 IP 每分钟 60 次。
+- 被限流时返回 HTTP 429，带响应头 `Retry-After: <秒>`，响应体为 `{"detail":"尝试次数过多，请 4 分 32 秒后再试","code":"rate_limited","retry_after":272}`。
+- **部署要求**：前端代理必须用真实来源地址覆盖 XFF，不能原样转发客户端发来的 XFF。只信任这一跳；多层可信代理时把 `ZM_PROXY_HOPS` 设为层数。
 
 ### 6. 数据归属与权限
 - **归属**：`worlds.owner_id` 决定世界及其所有子数据（回合、事件、记忆、小结、轨迹、角色、资产、海报、导出）归谁。创建、生成、教育生成、导入时，`owner_id` 记为当前用户（`ZM_AUTH_REQUIRED=0` 下的匿名请求记为 `u_demo`）。导入存档时，存档里的 `owner_id` 一律忽略，记为导入者。
@@ -354,7 +365,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 所有 detail 都是给用户看的中文（前端 `friendlyMessage` 对 4xx 直接显示 detail）。
 
 ### 10. 新增环境变量
-`ZM_AUTH_REQUIRED`（默认 0）· `ZM_JWT_SECRET`（缺省时自动生成并保存到 `$ZM_DATA_DIR/jwt_secret`）· `ZM_ACCESS_TTL_MIN`（30）· `ZM_REFRESH_TTL_DAYS`（30）· `ZM_COOKIE_SECURE`（0）· `ZM_DEMO_PASSWORD`（缺省时随机生成并写入 `$ZM_DATA_DIR/demo_password.txt`）· `ZM_TRUSTED_PROXIES`（`127.0.0.1/32,::1`）· `ZM_TRUST_PROXY`（1；0 = 完全不采信 XFF）· `ZM_REGISTER_PER_HOUR`（10）· `ZM_CORS_ORIGINS`（覆盖 CORS / Origin 白名单）· `ZM_AVATAR_MAX_BYTES`（2097152）。
+`ZM_AUTH_REQUIRED`（默认 0）· `ZM_JWT_SECRET`（缺省时自动生成并保存到 `$ZM_DATA_DIR/jwt_secret`）· `ZM_ACCESS_TTL_MIN`（30）· `ZM_REFRESH_TTL_DAYS`（30）· `ZM_COOKIE_SECURE`（0）· `ZM_DEMO_PASSWORD`（缺省时随机生成并写入 `$ZM_DATA_DIR/demo_password.txt`）· `ZM_TRUSTED_PROXIES`（`127.0.0.1/32,::1`）· `ZM_TRUST_PROXY`（1；0 = 完全不采信 XFF）· `ZM_REGISTER_PER_HOUR`（10） · `ZM_PROXY_HOPS`（1）· `ZM_LOGIN_ACCOUNT_MAX_FAILS`（10）· `ZM_LOGIN_ACCOUNT_WINDOW_MIN`（15）· `ZM_LOGIN_ACCOUNT_LOCK_MIN`（15）· `ZM_REGISTER_GLOBAL_PER_HOUR`（200）· `ZM_CORS_ORIGINS`（覆盖 CORS / Origin 白名单）· `ZM_AVATAR_MAX_BYTES`（2097152）。
 
 ### 11. 前端对接清单（织梦-前端）
 0. draft2 改动：`register` / `login` 返回 `{user}`，需要取 `.user`；`logout` 和改密码返回 204；未登录时 `/auth/me` 返回 401，但 401 的 body 里有 `auth_required` 和 `acting_as`。
@@ -385,6 +396,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 4. 取消「写接口只接受 application/json」，改为带 cookie 的写请求校验 Origin。
 5. `PATCH /api/users/me` 接受预设头像 `preset:<key>`。
 6. 登出、改密码、重放检测都会吊销对应会话（refresh family），该会话的 access 也立即失效（每次请求都会检查会话状态）。
+7. **AUTH-QA-3**：XFF 只取最右边那一跳（`ZM_PROXY_HOPS`）；新增与 IP 无关的按账号失败上限；可信代理没传 XFF 时 IP 记为未知，只靠按账号上限和全站注册上限兜底（见 §5）。
 
 ## 账号/鉴权 QA 契约（feat/auth，v1.4-draft2）
 供 QA 编写和调整 `backend/tests/integration/test_auth.py` 与 e2e 使用。接口细节以上一节「用户系统接口契约」为准。
@@ -399,12 +411,15 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 | `ZM_ACCESS_TTL_MIN` / `ZM_REFRESH_TTL_DAYS` | 30 / 30 | 可调小来测过期 |
 | `ZM_COOKIE_SECURE` | `0` | 设为 1 时 http 下浏览器不会回传 cookie |
 | `ZM_TRUSTED_PROXIES` | `127.0.0.1/32,::1` | 只有对端在这些网段时才采信 XFF / X-Real-IP（从右往左取第一个不可信地址）；进程内测试用 `TestClient(app, client=("127.0.0.1", port))` 加 `X-Forwarded-For` 区分 IP |
-| `ZM_REGISTER_PER_HOUR` | `10` | 同 IP 每小时注册上限 |
+| `ZM_REGISTER_PER_HOUR` | `10` | 同 IP 每小时注册上限（IP 未知时不生效） |
+| `ZM_REGISTER_GLOBAL_PER_HOUR` | `200` | 全站每小时注册上限 |
+| `ZM_LOGIN_ACCOUNT_MAX_FAILS` / `_WINDOW_MIN` / `_LOCK_MIN` | `10` / `15` / `15` | 按账号（与 IP 无关）的登录失败上限；QA 用例里同一账号刻意输错超过 10 次会被 429 |
+| `ZM_PROXY_HOPS` | `1` | 取 XFF 从右数第 N 项 |
 | `ZM_FORCE_FALLBACK` / `ZM_DISABLE_IMAGE` | — | 照旧：测试一律设为 1，不调用真实模型和生图 |
 
 **可测行为**
 1. 注册：201 `{user}`，同时 Set-Cookie `zm_access`（Path=/api）和 `zm_refresh`（Path=/api/auth），都是 HttpOnly、SameSite=Lax。用户名重复返回 409 `username_taken`；邮箱重复返回 409 `email_taken`；保留名返回 400 `username_reserved`；弱密码返回 400 `weak_password`；格式不对返回 422 `validation_error`，附 `field`。
-2. 登录：用户名或邮箱都能登，不区分大小写，返回 200 `{user}`。密码错误返回 401 `invalid_credentials`。同一 IP 加同一 login 失败 5 次后返回 429 `rate_limited`，带 `retry_after` 和 `Retry-After` 头；锁定期内密码正确也返回 429。
+2. 登录：用户名或邮箱都能登，不区分大小写，返回 200 `{user}`。（AUTH-QA-3 后）同一账号累计失败 10 次（与 IP 无关、可调，成功登录不清零）也返回 429；可信代理没传 XFF 时，按 IP 的锁定和每 IP 注册上限不生效。密码错误返回 401 `invalid_credentials`。同一 IP 加同一 login 失败 5 次后返回 429 `rate_limited`，带 `retry_after` 和 `Retry-After` 头；锁定期内密码正确也返回 429。
 3. `GET /api/auth/me`：已登录返回 200 `{authenticated:true, user, auth_required}`；未登录返回 401 `unauthorized`，附 `auth_required` 和 `acting_as`。伪造的 cookie（`zm_access=garbage`、`zm_session=…`、签名不对的 JWT）不能登录：带 `zm_access` 时返回 401 `token_expired`，只带未知名字的 cookie 时返回 401 `unauthorized`。
 4. 登出返回 204，之后同一会话的 access 和 refresh 都失效（`/auth/me` 返回 401，refresh 返回 401 `refresh_invalid`）；同一账号的其他会话不受影响。
 5. refresh 返回 200 `{user}`，并轮换两个 cookie。再用旧的 refresh 会返回 401 `refresh_invalid`，并且整串 family 被吊销：新拿到的 refresh 也会失效。
@@ -449,3 +464,10 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 - E2E（:8130/:3130，前端为工作区未提交代码的快照）：模式 0 AC-1~9 9/9 + auth 5/5；模式 1 AC-1~9 9/9（global-setup 登录）+ auth 5/5。前端 mock `pnpm test:mock` 67/67。
 - Docker（`-p zhimeng-auth`，:8140 仅本机 / :3140，无 .env，ZM_AUTH_REQUIRED=1）：两容器 healthy；匿名 `/api/worlds` 401；E2E AC 9/9 + auth 5/5；
   `down` → `up` 后旧 cookie 仍有效、账号可登录、世界仍在；jwt_secret / demo_password.txt 0600 在 zm-db 卷。限流：见 AUTH-QA-1 / AUTH-QA-3。
+- **AUTH-QA-3（后端部分已修复，2026-10-28）**：
+  - ① 新增按账号的失败上限（与 IP 无关）：同一账号 15 分钟内失败 10 次，锁 15 分钟；锁定期间正确密码也返回 429，带 `retry_after`。登录成功不清零。不存在的用户名同样计数，响应完全一致。阈值可通过 `ZM_LOGIN_ACCOUNT_*` 调。伪造 XFF 轮换 IP 不能再无限猜密码。
+  - ② 对端可信时只取 XFF 最右边那一跳（`ZM_PROXY_HOPS=1`），不再往左回溯。
+  - ③ 可信代理没传 XFF 和 `X-Real-IP` 时，客户端 IP 记为「未知」：按单 IP 的锁定（每 IP 20 次）、IP 加账号的锁定、每 IP 注册上限和 refresh 频率对它都不生效，只靠按账号上限和全站注册上限 `ZM_REGISTER_GLOBAL_PER_HOUR=200` 兜底。第一次出现时打一条 WARNING。这样不会再因为别人输错而锁住全站。
+  - pytest：`backend/tests/core/test_auth_qa3.py`。
+  - **仍需前端**用真实来源地址覆盖 XFF，否则按 IP 的规则形同虚设，只剩按账号这一道防线。
+  - 说明：「启动时」检测不到没传 XFF 的情况（启动时还没有请求），实际是在第一个这类请求到达时打一次警告。
