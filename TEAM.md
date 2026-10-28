@@ -100,7 +100,7 @@ def list_assets(world_id: str) -> list[Asset]
 
 ## 用户系统接口契约（feat/auth，草案 v1.4-draft2）
 
-> 状态：**v1.4-draft2**，2026-10-28，后端核心。draft2 按 Grok Bot 的裁定兼容前端和 QA 已经写好的调用方式（§12 列出与 draft1 的差异）。实现在 `feat/auth` 分支。
+> 状态：**v1.4-draft2，已实现**（`feat/auth`，后端提交 b8bdb02 起）。draft2 按 Grok Bot 的裁定兼容前端和 QA 已经写好的调用方式（§12 列出与 draft1 的差异，§13 列出实现时的修订）。
 > 本节在 `TEAM.md` 和 `API.md` 里内容相同；如有出入，以 `API.md` 为准。有异议请写进 `FRONTEND_REQUESTS.md`，或直接找 织梦-后端。
 
 ### 0. 设计取舍（为什么这样定）
@@ -140,7 +140,7 @@ def list_assets(world_id: str) -> list[Asset]
 ```ts
 type Preferences = {
   minor_mode: boolean;            // 默认 false。新建世界和教育世界时的默认值，同时是「下限」：开启后请求参数只能更严格（§8）
-  rating: Rating;                 // 默认 "teen"。新建世界时分级的上限
+  rating: Rating;                 // 默认 "teen"。新建世界时请求没给 rating 就用它（默认值，不是上限；上限只来自 minor_mode）
   tts_enabled: boolean;           // 默认 true。前端据此决定是否显示和播放配音（后端在关键场景仍会生成音频，v1 不改）
   autoplay_audio: boolean;        // 默认 false
   show_god_view: boolean;         // 默认 true（纯前端偏好，后端只负责存储）
@@ -160,7 +160,7 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 - **密钥**：读取 `ZM_JWT_SECRET`。没有设置时，第一次启动随机生成 64 字节，写入 `$ZM_DATA_DIR/jwt_secret`（权限 0600），之后重启沿用这个文件。密钥不写日志，也不出现在 `/api/health`。
 - **前端调用**：所有 `fetch`（包括 SSE 的 fetch-event-source）都要加 `credentials: "include"`。走 Next 同源代理 `/api/*` 时浏览器默认就会带上 cookie，但为了兼容 `NEXT_PUBLIC_API_BASE` 直连后端的模式，统一加上。
 - **CORS**：`allow_credentials=True`，`allow_origins` 必须写明确的来源（`ZM_CORS_ORIGINS` / `cors_origins`，默认 `http://localhost:3000,http://127.0.0.1:3000`），不能用 `*`。这些现在已经满足。注意 `localhost` 和 `127.0.0.1` 属于不同 site，cookie 不互通，开发时请统一用一个。
-- **CSRF**：靠 `SameSite=Lax` 防跨站提交；另外所有写接口只接受 `application/json`（头像上传除外，它是 multipart，但同样受 Lax 保护），并校验 `Origin` 头：只要请求带了 Origin，就必须在 CORS 白名单内，否则返回 403 `forbidden`。
+- **CSRF**：靠 `SameSite=Lax` 防跨站提交；并校验 `Origin` 头：带 `zm_*` cookie 的写请求（POST/PUT/PATCH/DELETE）如果带了 Origin，就必须在 CORS 白名单内（或与 Host 同源），否则返回 403 `forbidden`。（draft1 写的「写接口只接受 application/json」未实施：现有空 body 的 POST 较多，Lax + Origin 校验已足够。）
 - **SSE 鉴权**：SSE 接口都是 `POST + fetch`，和普通接口一样靠 cookie 鉴权，**不需要**在 URL 里带 token。鉴权在建立流之前完成：失败时直接返回 HTTP 401/404 JSON，不会先返回 200 再在流里报错。流开始后如果 access 过期，不会中断这条流。
 - **静态文件**：`/api/static/assets/*` 和 `/api/static/avatars/*` 不鉴权，文件名本身是不可猜测的随机 id，以便 `<img>`/`<audio>` 直接引用。
 
@@ -212,6 +212,7 @@ type User = { id: string; username: string; email: string | null; nickname: stri
 // 200
 { "user": User }
 ```
+兼容前端预设头像：body 可带 `avatar_url`（或 `avatar`）= `"preset:<key>"`（`[A-Za-z0-9_-]{1,32}`）或 `null`（清除）；其它 URL 一律 422，自定义图片只能走上传接口。
 错误：401 `unauthorized` / `token_expired` · 422 `validation_error` · 409 `email_taken` · 401 `wrong_password`（修改邮箱时 current_password 错误）· 403 `demo_readonly`（demo 账号不能改资料、密码、头像和邮箱，偏好可以改）。
 
 #### 3.7 `POST` 或 `PUT /api/users/me/password`（需登录，两种方法等价）
@@ -287,8 +288,8 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 ### 4. 校验规则
 | 字段 | 规则 | 错误码 |
 |---|---|---|
-| username | 3–20 位，`^[A-Za-z0-9_]+$`，不能以下划线开头；保留名（不区分大小写）：`demo admin root system zhimeng api null` | `validation_error` / `username_reserved` |
-| password | 8–72 位；至少包含字母和数字两类字符；不能等于用户名或邮箱；不能是常见弱密码（内置 top-100 列表） | `weak_password`（detail 写明原因） |
+| username | **字母开头**，3–20 位，只允许字母、数字、下划线：`^[A-Za-z][A-Za-z0-9_]{2,19}$`（前后端统一，AUTH-QA-2）；保留名（不区分大小写）：`demo admin root system zhimeng api null` | `validation_error` / `username_reserved` |
+| password | **8–64 位**（AUTH-QA-2：与前端统一）；至少包含字母和数字两类字符；不能等于用户名或邮箱；不能是常见弱密码（内置 top-100 列表） | `weak_password`（detail 写明原因） |
 | email | 选填；不超过 254 位；简单格式校验 `^[^@\s]+@[^@\s]+\.[^@\s]+$`；保存时转小写 | `validation_error` |
 | nickname | 去掉首尾空白后 1–20 个字符（中文算 1 个），不能包含控制字符；需要过 `safety.check_input(context="world_prompt")` 的规则层 | `validation_error` / `content_blocked` |
 | bio | 0–200 个字符；同样过规则层审核 | `validation_error` / `content_blocked` |
@@ -302,7 +303,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 - **修改密码**：同一用户输错当前密码 5 次，锁 5 分钟。
 - **refresh**：同一 IP 每分钟 60 次。
 - 被限流时返回 HTTP 429，带响应头 `Retry-After: <秒>`，响应体为 `{"detail":"尝试次数过多，请 4 分 32 秒后再试","code":"rate_limited","retry_after":272}`。锁定期内即使密码正确也返回 429。
-- IP 取连接的对端地址。只有对端是 `127.0.0.1` 或 `::1`（即 Next 代理）时，才采信 `X-Forwarded-For` 的第一段；`ZM_TRUST_PROXY=0` 可以关闭这项采信。
+- **客户端 IP（AUTH-QA-1）**：默认取连接的对端地址。只有对端在 `ZM_TRUSTED_PROXIES`（逗号分隔，支持 CIDR，默认 `127.0.0.1/32,::1`）里，才采信 `X-Forwarded-For`：**从右往左**跳过可信地址，取第一个不可信的地址（全部可信则取最左）；没有 XFF 时采信 `X-Real-IP`。不可信对端带来的 XFF / X-Real-IP 一律忽略。`ZM_TRUST_PROXY=0` 仍然兼容，表示完全不采信。限流和注册频率都按解析后的 IP 计算。
 
 ### 6. 数据归属与权限
 - **归属**：`worlds.owner_id` 决定世界及其所有子数据（回合、事件、记忆、小结、轨迹、角色、资产、海报、导出）归谁。创建、生成、教育生成、导入时，`owner_id` 记为当前用户（`ZM_AUTH_REQUIRED=0` 下的匿名请求记为 `u_demo`）。导入存档时，存档里的 `owner_id` 一律忽略，记为导入者。
@@ -328,7 +329,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 4. 测试和 QA 用的 tmp `ZM_DATA_DIR` 同样会自动生成 demo、密码文件和 jwt_secret。
 
 ### 8. 未成年人模式与偏好的关系（**偏好是默认值，请求参数只能更严格**）
-- 生成世界、教育生成、导入时：有效 `minor_mode` = `请求.minor_mode` **或** `偏好.minor_mode`。有效 `rating` = min(`请求.rating`（缺省时取偏好的 rating）, `偏好.rating`)，`minor_mode` 为 true 时再封顶到 `ZM_MINOR_MAX_RATING`（默认 teen）。分级从低到高为 all < teen < mature。
+- 生成世界、教育生成、导入时：有效 `minor_mode` = `请求.minor_mode` **或** `偏好.minor_mode`。有效 `rating` = `请求.rating`（缺省时取偏好的 rating）；`minor_mode` 为 true 时再封顶到 `ZM_MINOR_MAX_RATING`（默认 teen）。（实现时修订：偏好 rating 只作默认值、不作上限，否则默认偏好 teen 会让现有选 mature 的请求被悄悄降级。）分级从低到高为 all < teen < mature。
 - 请求里没有传 `minor_mode` 字段时，取偏好的值。现有的请求默认值不变：`GenerateWorldRequest.minor_mode=false`，`EducationGenerateRequest.minor_mode=true`。
 - `PATCH /api/worlds/{id}/settings`：偏好开启未成年人模式时，`minor_mode:false` 会被**忽略**，并且 rating 不能超过上限。返回的 `World` 是实际生效的值，响应头带 `X-ZM-Clamped: minor_mode,rating`，前端可以提示「已按账号的未成年人模式设置」。
 - 世界生成之后，偏好再变更不会回溯改动已有世界（世界自己的 `minor_mode` 字段仍是安全模块的输入）。但偏好开启时，打开该用户的世界会按上面的规则在读取时收紧：`GET /worlds/{id}` 返回收紧后的 `minor_mode` 和 `rating`，回合和生成同样按收紧后的值审核；收紧后的值在该世界下一次保存时写回数据库。
@@ -353,7 +354,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 所有 detail 都是给用户看的中文（前端 `friendlyMessage` 对 4xx 直接显示 detail）。
 
 ### 10. 新增环境变量
-`ZM_AUTH_REQUIRED`（默认 0）· `ZM_JWT_SECRET`（缺省时自动生成并保存到 `$ZM_DATA_DIR/jwt_secret`）· `ZM_ACCESS_TTL_MIN`（30）· `ZM_REFRESH_TTL_DAYS`（30）· `ZM_COOKIE_SECURE`（0）· `ZM_DEMO_PASSWORD`（缺省时随机生成并写入 `$ZM_DATA_DIR/demo_password.txt`）· `ZM_TRUST_PROXY`（1，只采信来自本机代理的 XFF）· `ZM_AVATAR_MAX_BYTES`（2097152）。
+`ZM_AUTH_REQUIRED`（默认 0）· `ZM_JWT_SECRET`（缺省时自动生成并保存到 `$ZM_DATA_DIR/jwt_secret`）· `ZM_ACCESS_TTL_MIN`（30）· `ZM_REFRESH_TTL_DAYS`（30）· `ZM_COOKIE_SECURE`（0）· `ZM_DEMO_PASSWORD`（缺省时随机生成并写入 `$ZM_DATA_DIR/demo_password.txt`）· `ZM_TRUSTED_PROXIES`（`127.0.0.1/32,::1`）· `ZM_TRUST_PROXY`（1；0 = 完全不采信 XFF）· `ZM_REGISTER_PER_HOUR`（10）· `ZM_CORS_ORIGINS`（覆盖 CORS / Origin 白名单）· `ZM_AVATAR_MAX_BYTES`（2097152）。
 
 ### 11. 前端对接清单（织梦-前端）
 0. draft2 改动：`register` / `login` 返回 `{user}`，需要取 `.user`；`logout` 和改密码返回 204；未登录时 `/auth/me` 返回 401，但 401 的 body 里有 `auth_required` 和 `acting_as`。
@@ -377,6 +378,14 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 8. cookie 名仍是 `zm_access` / `zm_refresh`；任何无效或伪造的 cookie（包括 `zm_session`）都不能通过鉴权。
 9. 新增 `GET /api/debug/status`；TEAM.md 新增「账号/鉴权 QA 契约」一节。
 
+### 13. 实现时的修订（2026-10-28，后端核心）
+1. 用户名改为**字母开头**，3–20 位，只允许字母、数字、下划线；密码 8–64 位（AUTH-QA-2，前后端统一）。
+2. 新增 `ZM_TRUSTED_PROXIES`（CIDR 列表），从右往左取 XFF 中第一个不可信的地址（AUTH-QA-1）。
+3. 偏好 `rating` 只作默认值，不作上限；上限只来自 `minor_mode`（默认偏好 teen 不会降级现有选 mature 的请求）。
+4. 取消「写接口只接受 application/json」，改为带 cookie 的写请求校验 Origin。
+5. `PATCH /api/users/me` 接受预设头像 `preset:<key>`。
+6. 登出、改密码、重放检测都会吊销对应会话（refresh family），该会话的 access 也立即失效（每次请求都会检查会话状态）。
+
 ## 账号/鉴权 QA 契约（feat/auth，v1.4-draft2）
 供 QA 编写和调整 `backend/tests/integration/test_auth.py` 与 e2e 使用。接口细节以上一节「用户系统接口契约」为准。
 
@@ -389,6 +398,8 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 | `ZM_JWT_SECRET` | 无（自动生成并持久化） | 更换后旧 cookie 全部失效 |
 | `ZM_ACCESS_TTL_MIN` / `ZM_REFRESH_TTL_DAYS` | 30 / 30 | 可调小来测过期 |
 | `ZM_COOKIE_SECURE` | `0` | 设为 1 时 http 下浏览器不会回传 cookie |
+| `ZM_TRUSTED_PROXIES` | `127.0.0.1/32,::1` | 只有对端在这些网段时才采信 XFF / X-Real-IP（从右往左取第一个不可信地址）；进程内测试用 `TestClient(app, client=("127.0.0.1", port))` 加 `X-Forwarded-For` 区分 IP |
+| `ZM_REGISTER_PER_HOUR` | `10` | 同 IP 每小时注册上限 |
 | `ZM_FORCE_FALLBACK` / `ZM_DISABLE_IMAGE` | — | 照旧：测试一律设为 1，不调用真实模型和生图 |
 
 **可测行为**
@@ -421,3 +432,10 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 |---|---|---|---|---|---|
 | AUTH-QA-1 | 织梦-后端 | Docker 部署下限流按 IP 失真：浏览器经前端容器（Next 代理）访问后端，对端是前端容器 IP 而非 127.0.0.1，`ZM_TRUST_PROXY` 不采信 `X-Forwarded-For`，所有用户共用一个 IP。同 IP 15 分钟 20 次登录失败锁 15 分钟、每小时 10 次注册 → 一人输错/批量注册会锁住全站 | `docker compose up`；用不同账号经 :3000 连续输错密码 20 次 → 第三个账号正确密码也 429；或注册 11 个账号 → 第 11 个 429 | 支持可配置的可信代理（如 `ZM_TRUSTED_PROXIES=172.16.0.0/12` 或 compose 网段），compose 里给默认值；或对私网对端也采信 XFF 首段 | OPEN（待 Docker 实测确认） |
 | AUTH-QA-2 | 织梦-前端 / 织梦-后端 | 用户名规则前后端不一致：前端要求字母开头（`^[A-Za-z][A-Za-z0-9_]*$`），后端允许数字开头（只禁止下划线开头）；密码上限前端 64、后端 72 | 注册 `1abc` 前端拦截，直接调 API 成功 | 统一一处规则（建议以契约 §4 为准，前端放宽到不以下划线开头、上限 72） | OPEN（非阻塞） |
+
+### 后端回复 QA 记录（织梦-后端，2026-10-28）
+- **AUTH-QA-1 已修复**（后端）：新增 `ZM_TRUSTED_PROXIES`，见契约 §5。根目录 `docker-compose.yml` 由 QA 维护，后端没有改动。**建议**在 backend 服务的 `environment` 里加：
+  `ZM_TRUSTED_PROXIES: ${ZM_TRUSTED_PROXIES:-127.0.0.1/32,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}`
+  这样前端容器（compose 默认网段是 172.x）转发来的 XFF 会被采信。注意：私网段整体可信后，局域网内直连 :8000 的客户端可以伪造 XFF。如果 :8000 不需要对局域网开放，建议只暴露 :3000，或把网段收窄到 compose 网络的实际子网。
+- **AUTH-QA-2 已统一**：以契约为准，用户名字母开头、3–20 位、只允许字母数字下划线；密码 8–64 位。后端已改。
+- 在 `ZM_AUTH_REQUIRED=1` 下，`tests/integration/test_v12_degrade.py::test_v12_whole_model_chain_down_degrades_to_templates` 会失败：子进程里匿名调用 `/api/worlds/generate` 返回 401（符合设计）。需要 QA 在这个用例里先登录，或者让它只在模式 0 下运行。
