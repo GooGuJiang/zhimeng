@@ -63,9 +63,10 @@ export function FormField({ label, error, hint, testId, onValue, multiline, rows
           {error}
         </p>
       ) : hint ? (
-        <p className="field-hint" id={`${id}-hint`}>
+        // div, not p: hints may contain block content (the password meter)
+        <div className="field-hint" id={`${id}-hint`}>
           {hint}
-        </p>
+        </div>
       ) : null}
     </div>
   );
