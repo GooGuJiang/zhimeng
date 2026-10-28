@@ -5,6 +5,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import { WORLD_ID, mockApi } from "./mock-api";
+import { mockAuth, signedIn } from "./auth-mock";
 
 const ON = ["1", "true", "yes", "on"].includes(
   (process.env.NEXT_PUBLIC_ZM_SHOW_AI_LABEL ?? "").toLowerCase(),
@@ -42,6 +43,32 @@ for (const [name, path] of [
     if (name === "play") await expect(page.locator('article[data-turn="1"]')).toBeVisible();
     else await page.waitForLoadState("networkidle");
     await page.waitForTimeout(800);
+    expect(await aiHits(page)).toEqual([]);
+    await expect(page.locator('[data-testid^="ai-label"]')).toHaveCount(0);
+  });
+}
+
+// account pages (signed in, every 个人中心 tab) + the guest auth pages + demo-mode banner
+for (const [name, path, mode] of [
+  ["login", "/login", "anon"],
+  ["register", "/register", "anon"],
+  ["me demo mode", "/me", "anon"],
+  ...["overview", "profile", "security", "works", "learning", "prefs"].map(
+    (t) => [`me ${t}`, `/me?tab=${t}`, "user"] as const,
+  ),
+] as const) {
+  test(`no visible AI wording: ${name}`, async ({ page }) => {
+    await mockApi(page);
+    if (mode === "user") await signedIn(page);
+    else await mockAuth(page);
+    await page.goto(path);
+    await page.waitForLoadState("networkidle");
+    if (mode === "user") {
+      await expect(page.getByTestId("me-page")).toBeVisible();
+      await page.getByTestId("user-menu-btn").click(); // include the dropdown
+      await expect(page.getByTestId("user-menu")).toBeVisible();
+    }
+    await page.waitForTimeout(500);
     expect(await aiHits(page)).toEqual([]);
     await expect(page.locator('[data-testid^="ai-label"]')).toHaveCount(0);
   });
