@@ -7,6 +7,8 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   prettier,
+  // Node preloads (`node --require`, no build step) are CommonJS by design
+  { files: ["scripts/**/*.cjs"], rules: { "@typescript-eslint/no-require-imports": "off" } },
   globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "openui/**"]),
 ]);
 

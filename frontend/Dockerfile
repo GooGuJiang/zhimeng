@@ -26,8 +26,11 @@ RUN useradd -r -u 10001 zm
 COPY --from=build --chown=zm /app/.next/standalone ./
 COPY --from=build --chown=zm /app/.next/static ./.next/static
 COPY --from=build --chown=zm /app/public ./public
+# AUTH-QA-3：在 Next 处理请求前丢弃客户端伪造的 X-Forwarded-For 等，并用 TCP 来源地址重写（见脚本注释）
+COPY --from=build --chown=zm /app/scripts/client-ip.cjs /app/scripts/client-ip-guard.cjs ./
 USER zm
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "server.js"]
+# 前面还有自己的反向代理（如 nginx）时设 ZM_TRUST_PROXY=1，才采信上游 X-Forwarded-For 的最后一跳
+CMD ["node", "--require", "./client-ip-guard.cjs", "server.js"]

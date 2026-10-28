@@ -3,16 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "NODE_OPTIONS=\"--require ./scripts/client-ip-guard.cjs $NODE_OPTIONS\" next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_OPTIONS=\"--require ./scripts/client-ip-guard.cjs $NODE_OPTIONS\" next start",
     "lint": "eslint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "openui:prompt": "tsx scripts/gen-openui.tsx",
     "openui:check": "tsx scripts/check-openui.tsx",
-    "test:mock": "playwright test -c tests"
+    "test:mock": "playwright test -c tests",
+    "test:client-ip": "node scripts/test-client-ip.mjs"
   },
   "dependencies": {
     "@openuidev/lang-core": "^1.0.1",
