@@ -111,12 +111,17 @@ flowchart LR
   （概览统计、个人资料与头像、账号安全/改密码、我的作品、学习记录、偏好设置）。顶栏显示头像与昵称，菜单里可退出。
 - **会话**：后端下发 httpOnly + SameSite=Lax 的 `zm_access`（30 分钟）/`zm_refresh`（30 天，每次刷新轮换并检测重放）两个 cookie，
   浏览器脚本拿不到 token；前端经同源 `/api` 代理调用，`access` 过期时自动刷新一次。登出会吊销当前会话；改密码让其他设备全部下线。
-- **密码**：argon2id 哈希存储，任何接口都不返回；8–72 位且同时含字母和数字、不能等于用户名、不能是常见弱密码。
+- **密码**：argon2id 哈希存储，任何接口都不返回；8–64 位且同时含字母和数字、不能等于用户名、不能是常见弱密码。
   登录失败同一 IP + 账号 15 分钟 5 次锁 5 分钟（429，`Retry-After`），同 IP 每小时最多注册 10 个账号。
 - **数据隔离**：世界及其回合、记忆、事件、资产、海报、导出、举报都按世界的 `owner_id` 归属；访问别人的资源一律 **404**（不暴露是否存在）。
   导入存档得到的是归导入者所有的新世界。
-- **匿名/演示账号**：`ZM_AUTH_REQUIRED=0`（默认，过渡期）时未登录请求按演示账号 `demo` 处理，原有演示流程不登录也能走通；
+- **匿名/演示账号**：Docker 交付默认 `ZM_AUTH_REQUIRED=1`，必须注册/登录才能创建和游玩世界；代码内默认 `0`（过渡期、旧 e2e）时未登录请求按演示账号 `demo` 处理，原有演示流程不登录也能走通；
   `ZM_AUTH_REQUIRED=1` 时未登录访问世界、资产、个人中心等接口返回 401，前端跳转登录页。修改资料/密码/头像始终需要真实登录。
+- **登录演示账号看旧数据**：升级前已有的世界、存档、学习记录在首次启动时自动迁移给演示账号 `demo`。
+  1. 在 `.env` 设置 `ZM_DEMO_PASSWORD=你的密码`（8–64 位，含字母和数字），再 `docker compose up -d`；
+     未设置时后端首次启动随机生成，用 `docker compose exec backend cat /data/demo_password.txt` 查看（本地运行则在 `$ZM_DATA_DIR/demo_password.txt`）。
+  2. 打开 http://localhost:3000/login ，账号填 `demo`，密码填上一步的值，即可在「我的作品」里看到旧数据。
+  3. 设置了 `ZM_DEMO_PASSWORD` 时它始终生效：修改该变量并重启后，demo 密码随之更新（在个人中心改的密码会在下次重启时被它覆盖）；未设置时沿用 `demo_password.txt` 里的密码。
 - **未成年人模式**：可在个人中心偏好里开启，作为新建世界的默认值和下限（请求只能更严格）；关闭时需输入当前密码（家长确认）。
 
 ## 快速开始
@@ -291,7 +296,7 @@ docker compose down               # 停止（数据保留在命名卷中）；do
   因此后端地址以构建参数 `BACKEND_ORIGIN` 传入（compose 已设置），代理超时 `ZM_PROXY_TIMEOUT_MS` 同理。
 - 账号：不填 `.env` 也能直接启动。`ZM_JWT_SECRET` / `ZM_DEMO_PASSWORD` 为空时由后端首次启动自动生成，保存在命名卷 `zm-db`
   （`/data/jwt_secret`、`/data/demo_password.txt`，0600），因此 `docker compose down` 后再 `up`，账号、会话和数据都还在（`down -v` 才会清空）。
-  查看演示账号密码：`docker compose exec backend cat /data/demo_password.txt`。默认 `ZM_AUTH_REQUIRED=0`，正式对外时在 `.env` 设 `ZM_AUTH_REQUIRED=1`；
+  查看演示账号密码：`docker compose exec backend cat /data/demo_password.txt`。compose 默认 `ZM_AUTH_REQUIRED=1`（必须登录），需要匿名演示时在 `.env` 设 `ZM_AUTH_REQUIRED=0`；建议 `.env` 设置 `ZM_DEMO_PASSWORD`；
   走 https 时设 `ZM_COOKIE_SECURE=1`；用 `localhost:3000` 以外的地址访问时，把该地址加入 `ZM_CORS_ORIGINS`（否则写操作返回 403）。
 - 数据：命名卷 `zm-db`（`/data`，SQLite `zhimeng.db`，含用户表；头像在 `/data/avatars`）、`zm-chroma`（`/data/chroma`，ChromaDB）、`zm-assets`（`/data/assets`，插画/配音）。
 - 密钥：`DASHSCOPE_API_KEY` 来自 `.env`（`env_file` 与 `${DASHSCOPE_API_KEY:-}`），只进入后端容器；为空时入口脚本强制 `ZM_FORCE_FALLBACK=1`，全流程可离线演示。

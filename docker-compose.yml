@@ -19,7 +19,11 @@ services:
       ZM_SHOW_AI_LABEL: ${ZM_SHOW_AI_LABEL:-0}
       # 账号系统（feat/auth）：不填 .env 也能起。JWT 密钥 / 演示账号密码未设置时由后端首次启动自动生成，
       # 写入 /data/jwt_secret、/data/demo_password.txt（0600，位于命名卷 zm-db，down/up 后会话与账号保持有效）
-      ZM_AUTH_REQUIRED: ${ZM_AUTH_REQUIRED:-0}       # 1 = 必须登录；0 = 匿名按演示账号 demo
+      ZM_AUTH_REQUIRED: ${ZM_AUTH_REQUIRED:-1}       # 交付默认 1 = 必须登录（未登录不能创建/游玩，前端跳登录页）；0 = 匿名按演示账号 demo（仅过渡/旧 e2e）
+      ZM_DEMO_PASSWORD: ${ZM_DEMO_PASSWORD:-}        # 演示账号 demo 的初始密码；留空则自动生成写入 /data/demo_password.txt
+      ZM_JWT_SECRET: ${ZM_JWT_SECRET:-}              # 留空则自动生成写入 /data/jwt_secret
+      # 只采信这些网段转发来的 X-Forwarded-For（前端容器在 compose 私网里）；后端端口不要对公网开放
+      ZM_TRUSTED_PROXIES: ${ZM_TRUSTED_PROXIES:-127.0.0.1/32,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       ZM_COOKIE_SECURE: ${ZM_COOKIE_SECURE:-0}       # 走 https 时设 1
       # 写接口校验 Origin：浏览器访问前端用的地址必须在白名单内（换端口/域名/IP 访问时在 .env 设 ZM_CORS_ORIGINS）
       ZM_CORS_ORIGINS: ${ZM_CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}
