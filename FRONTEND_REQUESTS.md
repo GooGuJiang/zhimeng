@@ -50,3 +50,34 @@ Frontend is fully wired to v1.1 (all 9 Playwright ACs pass in fallback mode). Re
 6. Document `World.opening_options` (present in payloads, not in API.md; frontend uses `GET /options`).
 7. Stability note: during my first e2e run the shared :8000 process was restarted mid-turn → proxy 500; the client
    showed 「重试」 and resent the same `client_turn_id` correctly, but please keep :8000 stable while QA runs.
+
+## 4. Accounts (feat/auth, against API v1.4-draft2 + TEAM.md §13) — frontend, 2026-10-28
+Frontend is integrated against the real backend in both `ZM_AUTH_REQUIRED=1` (delivery default) and `=0`.
+Mock specs, QA `auth.spec.ts` and the full e2e all pass. Remaining asks, most important first:
+
+1. **[need] Honour `tts_enabled=false` server-side.** The pref is only stored (`auth/prefs.py`). When it is off,
+   the frontend hides the audio bar, but key-scene narration is still generated, so the user still pays for TTS.
+   Please skip the TTS job (and its `asset` event) for worlds whose owner has `tts_enabled=false`.
+2. **Preset avatar keys.** `PATCH /users/me {avatar_url:"preset:<key>"}` accepts any `[A-Za-z0-9_-]{1,32}`. The
+   frontend offers exactly `moon bamboo boat crane cloud hill lamp ink` (`frontend/src/components/Avatar.tsx`
+   `AVATAR_PRESETS`). Please whitelist these keys, or document them in API.md, so other clients render the same set.
+3. **Anonymous `GET /auth/me` → 401** shows a red "Failed to load resource" line in the browser console on every
+   signed-out page load (the frontend treats it as normal and no longer logs it). Consider `200 {authenticated:false,
+   auth_required, acting_as}`, or accept that the 401 is noise.
+4. **Copy for `username_taken`.** Backend says 「用户名已被占用」. The frontend shows its own wording
+   (「该用户名已被注册，换一个试试，或直接登录」), as QA's spec expects. No change needed unless other clients
+   should match.
+5. **E2E rate limits.** `ZM_REGISTER_PER_HOUR=10`/IP is used up after one or two full e2e runs (every run registers
+   users), and then register returns 429. For CI/QA runs, please document setting `ZM_REGISTER_PER_HOUR` high, or
+   exempt loopback when `ZM_ENV=test`.
+6. **AUTH-QA-3 (client IP), frontend side done.** `scripts/client-ip-guard.cjs` is preloaded by `pnpm dev`,
+   `pnpm start` and the Docker CMD. It drops the client's X-Forwarded-For / X-Real-IP / Forwarded / CF-Connecting-IP / …
+   and sends exactly one `X-Forwarded-For: <TCP peer>`. Next's rewrite proxy can't do this itself
+   (`base-server` only does `xff ??= socket.remoteAddress`, httpxy forwards headers unchanged), and route handlers
+   can't see the socket. Proof: `pnpm test:client-ip` and a real-backend check (6 registrations with different
+   spoofed IPs through the proxy hit 429 after `ZM_REGISTER_PER_HOUR=3`). Behind our own reverse proxy (nginx in
+   front of the frontend container), set **`ZM_TRUST_PROXY=1` on the frontend**; only then is the upstream's last
+   XFF hop used. Please pass it through in docker-compose (`frontend.environment`) when such a proxy is added.
+   Keep `ZM_TRUSTED_PROXIES` on the backend limited to the frontend container / loopback.
+7. **Origins for non-3000 ports.** Write requests are Origin-checked. Test servers on other ports need
+   `ZM_CORS_ORIGINS=http://localhost:<port>,...` (this works without code changes); worth a line in the README.
