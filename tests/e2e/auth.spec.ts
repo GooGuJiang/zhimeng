@@ -1,7 +1,7 @@
 /**
  * feat/auth 账号 E2E（契约：API.md「用户系统接口契约」+ TEAM.md「账号/鉴权 QA 契约」v1.4-draft2；页面 testid 以前端实际实现为准，见 TESTIDS.md）
  *   注册 A → 登出 → 登录 A → 创建世界 → 个人中心「我的作品」可见 → 登出 → 注册/登录 B → 看不到 A 的世界（列表、
- *   直接打开链接、API 均 404）→ 退出后 /me 跳转登录页、/api/auth/me 未登录。
+ *   直接打开链接、API 均 404）→ 退出后 /me 跳转登录页（ZM_AUTH_REQUIRED=1）或显示演示账号（=0）、/api/auth/me 401。
  * 后端或前端尚未就绪时整体 skip（原因写在 skip 信息里）。兜底模式运行，不触发真实生图/配音。
  */
 import { test, expect, type Page } from "@playwright/test";
@@ -27,16 +27,18 @@ test.beforeAll(async ({ browser }) => {
     return;
   }
   const res = await page.goto("/register");
-  const ready = res?.ok() && (await page.getByTestId("register-form").count()) > 0;
+  // 生产构建里 /register 先渲染 Suspense 骨架，表单在客户端挂载后才出现 → 等待而不是立即计数
+  const ready = !!res?.ok() && (await page.getByTestId("register-form").waitFor({ timeout: 20_000 }).then(() => true, () => false));
   await ctx.close();
   test.skip(!ready, "前端注册页 /register 未就绪（缺 data-testid=register-form）：等待 织梦-前端");
 });
 
 async function register(page: Page, u: { username: string; nickname: string }) {
   await page.goto("/register");
-  await el(page, "register-username", page.getByLabel("账号")).first().fill(u.username);
-  await el(page, "register-nickname", page.getByLabel("昵称")).first().fill(u.nickname);
-  await el(page, "register-password", page.getByLabel(/^密码/)).first().fill(PW);
+  // 前端已实现这些 testid；不用 getByLabel 兜底（「注册织梦账号」卡片的 aria-label 也含「账号」，会误匹配）
+  await page.getByTestId("register-username").fill(u.username);
+  await page.getByTestId("register-nickname").fill(u.nickname);
+  await page.getByTestId("register-password").fill(PW);
   const confirm = page.getByTestId("register-confirm");
   if (await confirm.count()) await confirm.fill(PW);
   await el(page, "register-submit", page.getByRole("button", { name: /注册/ })).first().click();
@@ -45,8 +47,8 @@ async function register(page: Page, u: { username: string; nickname: string }) {
 
 async function login(page: Page, u: { username: string; nickname: string }) {
   await page.goto("/login");
-  await el(page, "login-username", page.getByLabel("账号")).first().fill(u.username);
-  await el(page, "login-password", page.getByLabel("密码")).first().fill(PW);
+  await page.getByTestId("login-username").fill(u.username);
+  await page.getByTestId("login-password").fill(PW);
   await el(page, "login-submit", page.getByRole("button", { name: /^登录$/ })).first().click();
   await expectSignedIn(page, u.nickname);
 }
@@ -106,12 +108,19 @@ test("另一用户登录后看不到 A 的世界（个人中心 / 直达链接 /
   await page.screenshot({ path: "../../docs/screens/auth-02-other-user-404.png" });
 });
 
-test("退出后个人中心需要重新登录", async ({ page }) => {
+test("退出后个人中心不再是该用户（必须登录模式跳登录页；演示模式显示演示账号）", async ({ page }) => {
   await login(page, B);
   await logout(page);
+  const me = await (await page.request.get("/api/auth/me")).json();
   await page.goto("/me");
-  await expect(page).toHaveURL(/\/login\?next=/, { timeout: 20_000 });
-  await expect(page.getByTestId("login-form")).toBeVisible();
+  if (me.auth_required) {
+    await expect(page).toHaveURL(/\/login\?next=/, { timeout: 20_000 });
+    await expect(page.getByTestId("login-form")).toBeVisible();
+  } else {
+    // ZM_AUTH_REQUIRED=0：未登录 = 演示账号 demo，个人中心按设计展示 demo（不跳转）
+    await expect(page.getByTestId("me-nickname")).toContainText(me.acting_as?.nickname ?? "演示账号", { timeout: 20_000 });
+    await expect(page.getByText(B.nickname)).toHaveCount(0);
+  }
 });
 
 test("错误密码给出中文提示，不登录", async ({ page }) => {
@@ -130,5 +139,6 @@ test("重复注册同一账号提示已被注册", async ({ page }) => {
   await page.getByTestId("register-password").fill(PW);
   if (await page.getByTestId("register-confirm").count()) await page.getByTestId("register-confirm").fill(PW);
   await page.getByTestId("register-submit").click();
-  await expect(page.getByText(/已被注册|已存在/).first()).toBeVisible();
+  await expect(page.getByTestId("register-username-error").or(page.getByTestId("register-error")).first()).toContainText(/已被注册|已存在|已被占用/);
+  expect((await page.request.get("/api/auth/me")).status()).toBe(401);
 });

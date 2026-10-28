@@ -182,13 +182,14 @@ pnpm dev            # http://localhost:3000
 | `RETRIEVAL_BUDGET_S` | `1.2` | 记忆向量检索时间预算，超时跳过检索 |
 | `KEY_SCENE_MEDIA_DEADLINE_S` | `3` | 关键场景插画/配音在回合流中的最长等待（秒）；超时先返回 `pending` 占位，后台原地升级（同 id，`GET /api/assets/{id}?wait=` 可长轮询） |
 | `ZM_ADMIN_TOKEN` | 空 | 管理员令牌：`GET /api/reports` 不带 `world_id` 查看全量举报需请求头 `X-Admin-Token` 一致；为空则禁用全量列表 |
-| `ZM_AUTH_REQUIRED` | `0` | 账号系统：`1` = 未登录访问受保护接口返回 401；`0` = 未登录按演示账号 `demo` 处理（上线前建议设 1） |
+| `ZM_AUTH_REQUIRED` | compose / .env.example：`1`；代码内：`0` | 账号系统：`1` = 必须登录（未登录访问世界/资产/个人中心等接口返回 401，前端跳登录页）；`0` = 未登录按演示账号 `demo` 处理（仅过渡期 / 旧脚本） |
 | `ZM_JWT_SECRET` | 空（自动生成） | 会话签名密钥。为空时首次启动生成 64 字节写入 `$ZM_DATA_DIR/jwt_secret`（0600）并沿用；更换会让所有登录失效。不写日志、不出现在 `/api/health` |
 | `ZM_DEMO_PASSWORD` | 空（自动生成） | 演示账号 `demo` 的密码；为空时随机生成写入 `$ZM_DATA_DIR/demo_password.txt`（0600），日志只打印路径 |
 | `ZM_ACCESS_TTL_MIN` / `ZM_REFRESH_TTL_DAYS` | `30` / `30` | access / refresh 会话有效期 |
 | `ZM_COOKIE_SECURE` | `0` | `1` = cookie 带 Secure（仅 https）；本地 http 保持 0 |
 | `ZM_CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | 来源白名单：CORS（带凭据，不能用 `*`）+ 写接口 Origin 校验。用其它域名/IP/端口访问前端时必须加入 |
-| `ZM_TRUST_PROXY` | `1` | 仅当对端是本机（Next 代理）时采信 `X-Forwarded-For`，用于按真实 IP 限流 |
+| `ZM_TRUSTED_PROXIES` | 代码内 `127.0.0.1/32,::1`；compose 另加私网段 `172.16.0.0/12,10.0.0.0/8,192.168.0.0/16` | 只有请求来自这些网段（即前端 Next 代理）时才采信 `X-Forwarded-For`，从右往左取第一个不可信地址作为客户端 IP，用于登录/注册限流。已知限制见 TEAM.md AUTH-QA-3 |
+| `ZM_TRUST_PROXY` | `1` | `0` = 完全不采信 `X-Forwarded-For`（一律按对端地址限流） |
 | `ZM_AVATAR_MAX_BYTES` / `ZM_REGISTER_PER_HOUR` | `2097152` / `10` | 头像大小上限 / 同 IP 每小时注册上限 |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
@@ -209,6 +210,7 @@ backend/.venv/bin/python scripts/ttft.py --turns 5   # 对运行中的服务测�
 cd tests/e2e && pnpm install
 pnpm test                         # AC-1 ~ AC-9 + 账号用例 auth.spec.ts（注册→登录→建世界→个人中心→他人不可见→退出）
 ZM_AUTH_REQUIRED=1 的后端上跑 pnpm test  # global-setup 自动注册 QA 用户，AC 用例以登录身份运行
+                                  # 登录态写入本次运行专属文件（ZM_E2E_STATE，默认 /tmp/zm-e2e-state-<pid>.json），并发运行互不覆盖
 ZM_MODE=real pnpm test            # 真实模型模式（放宽超时；回合被限流失败时像用户一样点「重试」，次数记入测试注解）
 pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/（ZM_MODE=real pnpm demo 用真实模型）
 
@@ -284,7 +286,8 @@ cd tests/e2e && pnpm exec playwright test auth.spec.ts      # E2E 账号流程�
 
 ```bash
 cp .env.example .env              # 可填 DASHSCOPE_API_KEY；留空 = 本地兜底模式
-docker compose up -d --build      # 前端 http://localhost:3000 · 后端 http://localhost:8000
+docker compose up -d --build      # 前端 http://localhost:3000（对外）· 后端 http://127.0.0.1:8000（只绑本机）
+cat .env 2>/dev/null; docker compose exec backend cat /data/demo_password.txt   # 演示账号 demo 的密码（未设 ZM_DEMO_PASSWORD 时）
 docker compose ps                 # 两个服务均应为 healthy
 curl http://localhost:3000/api/health
 docker compose logs -f backend
@@ -294,6 +297,8 @@ docker compose down               # 停止（数据保留在命名卷中）；do
 - 镜像：`backend/Dockerfile`（python:3.12-slim，`uvicorn app.main:app` 监听 8000，非 root）、`frontend/Dockerfile`（pnpm 多阶段，Next standalone，`node server.js` 监听 3000）。
 - 代理：浏览器只访问前端；`/api/*`（含生成资产 `/api/static/assets`）经 compose 内部网络转发到 `http://backend:8000`。Next 的 rewrites 在**构建期**确定，
   因此后端地址以构建参数 `BACKEND_ORIGIN` 传入（compose 已设置），代理超时 `ZM_PROXY_TIMEOUT_MS` 同理。
+- **默认必须登录**：compose 默认 `ZM_AUTH_REQUIRED=1`，打开 http://localhost:3000 先注册或登录才能创建、游玩世界（未登录访问个人中心会跳到 `/login?next=`）；
+  升级前的旧数据归演示账号 `demo`，用它登录即可看到（见上文「账号与个人中心」）。
 - 账号：不填 `.env` 也能直接启动。`ZM_JWT_SECRET` / `ZM_DEMO_PASSWORD` 为空时由后端首次启动自动生成，保存在命名卷 `zm-db`
   （`/data/jwt_secret`、`/data/demo_password.txt`，0600），因此 `docker compose down` 后再 `up`，账号、会话和数据都还在（`down -v` 才会清空）。
   查看演示账号密码：`docker compose exec backend cat /data/demo_password.txt`。compose 默认 `ZM_AUTH_REQUIRED=1`（必须登录），需要匿名演示时在 `.env` 设 `ZM_AUTH_REQUIRED=0`；建议 `.env` 设置 `ZM_DEMO_PASSWORD`；
@@ -301,6 +306,15 @@ docker compose down               # 停止（数据保留在命名卷中）；do
 - 数据：命名卷 `zm-db`（`/data`，SQLite `zhimeng.db`，含用户表；头像在 `/data/avatars`）、`zm-chroma`（`/data/chroma`，ChromaDB）、`zm-assets`（`/data/assets`，插画/配音）。
 - 密钥：`DASHSCOPE_API_KEY` 来自 `.env`（`env_file` 与 `${DASHSCOPE_API_KEY:-}`），只进入后端容器；为空时入口脚本强制 `ZM_FORCE_FALLBACK=1`，全流程可离线演示。
 - 成本：compose 默认 `ZM_DISABLE_IMAGE=1`（插画用占位 SVG，不调用百炼生图）；需要真实插画时在 `.env` 设 `ZM_DISABLE_IMAGE=0`。
+- 后端端口：默认只绑定 `127.0.0.1`（`BACKEND_BIND`，默认 `127.0.0.1`），浏览器只需访问前端，`/api` 经内部网络代理。原因：后端信任私网段转发的
+  `X-Forwarded-For`，若把 8000 对外开放，外部可直接伪造来源 IP 绕过登录限流。本机 `curl http://127.0.0.1:8000/api/health` 与 E2E 的直连请求不受影响；
+  确需对外暴露后端时设 `BACKEND_BIND=0.0.0.0`，并把 `ZM_TRUSTED_PROXIES` 收窄到前端容器所在网段。
+- 健康检查：两个镜像都用自带运行时（Python urllib / Node fetch）检查，构建不再 apt 安装 curl（不依赖 Debian 镜像源）。
+- 镜像标签：`ZM_IMAGE_TAG`（默认 `latest`）。同机并行验证分支时可用 `ZM_IMAGE_TAG=auth docker compose -p zhimeng-auth ...`，避免覆盖主线镜像与数据卷
+  （注意网络名 `zhimeng_net` / 网桥 `zm-br0` 固定，两套 compose 不能同时运行）。
+- 注意：compose 会用**当前 shell 环境**里的 `DASHSCOPE_API_KEY` 插值（优先于 `.env`）。想以兜底模式验证时用 `env -u DASHSCOPE_API_KEY docker compose up -d`。
+- 对容器跑 E2E（以 `FRONTEND_PORT=3140 BACKEND_PORT=8140` 为例）：`cd tests/e2e && ZM_WEB=http://localhost:3140 ZM_API=http://localhost:8140 pnpm exec playwright test --project=ac`
+  —— global-setup 检测到 `auth_required` 后自动注册 QA 用户，AC-1~AC-9 以登录身份运行，`auth.spec.ts` 从未登录状态开始。
 - 端口冲突：如本机已用 `scripts/dev.sh` 占用 3000/8000，先 `scripts/stop.sh`（只按端口停进程），或在 `.env` 改 `FRONTEND_PORT` / `BACKEND_PORT`。
 - 排障：若前端 `/api/*` 超时而 `curl localhost:8000/api/health` 正常，说明容器间流量被宿主防火墙拦截（例如宿主残留 `iptables-legacy` 的 `FORWARD DROP`）。
   compose 固定网桥名为 `zm-br0`，可放行：`sudo iptables-legacy -I DOCKER-USER -i zm-br0 -o zm-br0 -j ACCEPT`（本开发机即属此情况）。

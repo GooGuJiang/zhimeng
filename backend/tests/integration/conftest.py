@@ -89,14 +89,15 @@ LOOPBACK = ("127.0.0.1", 50123)  # 进程内客户端伪装成本机代理，使
 
 
 def unique_name(prefix: str = "qa") -> str:
-    """用户名规则：3–20 位，字母/数字/下划线，不以下划线开头。"""
+    """用户名规则（契约 §13）：字母开头，3–20 位，字母/数字/下划线。"""
     return f"{prefix[:8]}_{uuid.uuid4().hex[:8]}"
 
 
 def unique_ip() -> str:
     """每个测试用户用独立的来源 IP（经 X-Forwarded-For），互不触发注册/登录限流。"""
+    # 198.18.0.0/15（基准测试保留网段）：不会落在任何 ZM_TRUSTED_PROXIES 建议网段里，按 §13 从右往左取到的就是它
     h = uuid.uuid4().bytes
-    return f"10.{h[0]}.{h[1]}.{h[2] or 1}"
+    return f"198.{18 + (h[0] & 1)}.{h[1]}.{h[2] or 1}"
 
 
 def auth_enabled(client) -> bool:

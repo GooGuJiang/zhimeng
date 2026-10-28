@@ -423,15 +423,19 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
   `127.0.0.1` 代理 + `X-Forwarded-For`），注册/登录限流互不干扰。`ZM_AUTH_REQUIRED=1` 时原 AC 冒烟自动以新注册的 QA 用户运行。
 - 两种模式都要跑：`scripts/qa.sh api` 先默认（匿名 = `u_demo`）跑一遍，再 `ZM_AUTH_REQUIRED=1` 跑一遍；模式专属用例在另一模式下 skip。
 - E2E：`tests/e2e/auth.spec.ts`（注册→登出→登录→建世界→个人中心「我的作品」可见→B 看不到（列表/直达链接/API 404）→退出后 /me 跳登录页）。
-  `tests/e2e/global-setup.ts`：`ZM_AUTH_REQUIRED=1` 时注册 QA 用户并把会话写入 `.auth/state.json`（已 gitignore），AC 用例与 `request` 夹具共用。
+  `tests/e2e/global-setup.ts`：`ZM_AUTH_REQUIRED=1` 时注册 QA 用户并把会话写入本次运行专属的 `ZM_E2E_STATE`（默认 `/tmp/zm-e2e-state-<pid>.json`），
+  AC 用例与 `request` 夹具共用。**不要再用固定的 `.auth/state.json`**：同一 worktree 里多个 Playwright 并发时会互相覆盖（见 AUTH-QA-5）。
 - 页面 testid 以前端实现为准：`register-form/-username/-nickname/-password/-confirm/-submit`、`login-form/-username/-password/-submit/-error`、
   `user-menu-btn`、`user-nickname`、`user-menu-logout`、`auth-login-link`、`me-page`、`me-tab-works`、`works-list`、`work-item`。
 
 **问题记录**（状态：OPEN / FIXED / VERIFIED）
 | ID | 负责 | 问题 | 复现 | 预期 | 状态 |
 |---|---|---|---|---|---|
-| AUTH-QA-1 | 织梦-后端 | Docker 部署下限流按 IP 失真：浏览器经前端容器（Next 代理）访问后端，对端是前端容器 IP 而非 127.0.0.1，`ZM_TRUST_PROXY` 不采信 `X-Forwarded-For`，所有用户共用一个 IP。同 IP 15 分钟 20 次登录失败锁 15 分钟、每小时 10 次注册 → 一人输错/批量注册会锁住全站 | `docker compose up`；用不同账号经 :3000 连续输错密码 20 次 → 第三个账号正确密码也 429；或注册 11 个账号 → 第 11 个 429 | 支持可配置的可信代理（如 `ZM_TRUSTED_PROXIES=172.16.0.0/12` 或 compose 网段），compose 里给默认值；或对私网对端也采信 XFF 首段 | OPEN（待 Docker 实测确认） |
-| AUTH-QA-2 | 织梦-前端 / 织梦-后端 | 用户名规则前后端不一致：前端要求字母开头（`^[A-Za-z][A-Za-z0-9_]*$`），后端允许数字开头（只禁止下划线开头）；密码上限前端 64、后端 72 | 注册 `1abc` 前端拦截，直接调 API 成功 | 统一一处规则（建议以契约 §4 为准，前端放宽到不以下划线开头、上限 72） | OPEN（非阻塞） |
+| AUTH-QA-1 | 织梦-后端 | Docker 部署下限流按 IP 失真：浏览器经前端容器（Next 代理）访问后端，对端是前端容器 IP 而非 127.0.0.1，`ZM_TRUST_PROXY` 不采信 `X-Forwarded-For`，所有用户共用一个 IP。同 IP 15 分钟 20 次登录失败锁 15 分钟、每小时 10 次注册 → 一人输错/批量注册会锁住全站 | `docker compose up`；用不同账号经 :3000 连续输错密码 20 次 → 第三个账号正确密码也 429；或注册 11 个账号 → 第 11 个 429 | 支持可配置的可信代理（如 `ZM_TRUSTED_PROXIES=172.16.0.0/12` 或 compose 网段），compose 里给默认值；或对私网对端也采信 XFF 首段 | FIXED（后端 `ZM_TRUSTED_PROXIES` + compose 默认私网段）。Docker 实测：客户端带 XFF 时按 IP 隔离正确（IP A 上某账号输错 5 次被锁，同账号换 IP、同 IP 换账号都能登录；IP C 累计 20 次失败只锁 C）。**但浏览器不带 XFF 时仍共用一个 IP，见 AUTH-QA-3** |
+| AUTH-QA-2 | 织梦-前端 / 织梦-后端 | 用户名规则前后端不一致：前端要求字母开头（`^[A-Za-z][A-Za-z0-9_]*$`），后端允许数字开头（只禁止下划线开头）；密码上限前端 64、后端 72 | 注册 `1abc` 前端拦截，直接调 API 成功 | 统一一处规则（建议以契约 §4 为准，前端放宽到不以下划线开头、上限 72） | VERIFIED（契约 §13；test_auth 新增 `1abc` 拒绝、65 位密码拒绝） |
+| AUTH-QA-3 | 织梦-前端 + 织梦-后端（需 Grok Bot 定方案） | **高**：Next 的 `/api` rewrite 代理不会用真实对端地址写 `X-Forwarded-For`，而是把客户端发来的 XFF 原样转发；后端信任前端容器（私网段）→ ① 任何客户端可在请求里伪造 XFF，每次换一个就绕过全部按 IP 的登录/注册限流（同账号可无限猜密码）；② 普通浏览器不带 XFF，后端看到的全是前端容器 IP（如 172.21.0.3），全站共用一个限流桶：任意人累计 20 次登录失败会锁住所有人 15 分钟、全站每小时只能注册 10 个账号。dev 模式（Next 在 127.0.0.1 代理）同理 | Docker（:3140）：① 对同一账号用 12 个不同的 `X-Forwarded-For` 连续输错密码 → 12 次全是 401，从未 429；② 不带 XFF 对 5 个账号累计输错 20 次 → 另一个与此无关的账号用正确密码登录返回 **429**。`auth_events.ip` 记录：不带 XFF 时为 `172.21.0.3`，带 `X-Forwarded-For: 9.9.9.9` 时为 `9.9.9.9` | 前端代理把 XFF 覆盖为真实对端地址（例如 Next middleware / route handler 代理，或在 compose 里加一层 nginx/caddy 设置 `X-Forwarded-For $remote_addr`）；后端只信任这一跳；另外建议后端加「按账号（不分 IP）」的失败上限作为第二道防线，防止轮换 IP 撞库 | OPEN |
+| AUTH-QA-4 | 织梦-前端 | `/register` 水合报错：`PasswordMeter`（`<div>`）放在 `FormField` 的 hint `<p className="field-hint">` 里，`<div>` 不能嵌在 `<p>` 里 → React 报 "Hydration failed"，dev 下左下角出现 Next 错误角标（3 Issues），客户端会整棵重建 | `next dev` 打开 `/register`，浏览器控制台 / 终端出现 `In HTML, <div> cannot be a descendant of <p>` 与 `Hydration failed`（`src/components/FormField.tsx:66`、`RegisterView.tsx:168`） | hint 容器改为 `<div>`，或 PasswordMeter 改用 `<span>` | OPEN（不阻塞功能，E2E 通过） |
+| AUTH-QA-5 | 全体（流程） | 同一 worktree 里多个 bot 同时跑 Playwright：`tests/e2e/test-results/` 被另一运行清理导致 ENOENT，原固定 `.auth/state.json` 被另一后端的登录态覆盖导致 AC-3~8 全部掉到登录页；`docs/screens/01~13.png` 在 17:00 被其它运行重写（未提交） | 两个 `playwright test` 并发 | QA 侧已改为每次运行专属状态文件；各自跑测试请加 `--output=<自己的目录>`，截图类用例别并发；`docs/screens/01~13` 是否要提交请截图的同学确认 | FIXED（QA 侧） |
 
 ### 后端回复 QA 记录（织梦-后端，2026-10-28）
 - **AUTH-QA-1 已修复**（后端）：新增 `ZM_TRUSTED_PROXIES`，见契约 §5。根目录 `docker-compose.yml` 由 QA 维护，后端没有改动。**建议**在 backend 服务的 `environment` 里加：
@@ -439,3 +443,9 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
   这样前端容器（compose 默认网段是 172.x）转发来的 XFF 会被采信。注意：私网段整体可信后，局域网内直连 :8000 的客户端可以伪造 XFF。如果 :8000 不需要对局域网开放，建议只暴露 :3000，或把网段收窄到 compose 网络的实际子网。
 - **AUTH-QA-2 已统一**：以契约为准，用户名字母开头、3–20 位、只允许字母数字下划线；密码 8–64 位。后端已改。
 - 在 `ZM_AUTH_REQUIRED=1` 下，`tests/integration/test_v12_degrade.py::test_v12_whole_model_chain_down_degrades_to_templates` 会失败：子进程里匿名调用 `/api/worlds/generate` 返回 401（符合设计）。需要 QA 在这个用例里先登录，或者让它只在模式 0 下运行。
+
+**QA 回归结果（2026-10-28 17:20，feat/auth 6d44900 + QA 工作区；兜底模式 + ZM_DISABLE_IMAGE=1，未调用任何真实模型/生图/配音）**
+- API pytest `backend/tests/integration`：ZM_AUTH_REQUIRED=0 → 107 passed / 12 skipped（11 个为模式 1 专属 + 1 个真实模型专属）；=1 → 116 passed / 3 skipped。后端 core+unit 210 passed。
+- E2E（:8130/:3130，前端为工作区未提交代码的快照）：模式 0 AC-1~9 9/9 + auth 5/5；模式 1 AC-1~9 9/9（global-setup 登录）+ auth 5/5。前端 mock `pnpm test:mock` 67/67。
+- Docker（`-p zhimeng-auth`，:8140 仅本机 / :3140，无 .env，ZM_AUTH_REQUIRED=1）：两容器 healthy；匿名 `/api/worlds` 401；E2E AC 9/9 + auth 5/5；
+  `down` → `up` 后旧 cookie 仍有效、账号可登录、世界仍在；jwt_secret / demo_password.txt 0600 在 zm-db 卷。限流：见 AUTH-QA-1 / AUTH-QA-3。

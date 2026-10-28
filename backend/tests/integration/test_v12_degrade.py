@@ -76,6 +76,11 @@ CHAIN_DOWN = textwrap.dedent(r'''
     from conftest import parse_sse, first
     out = {}
     with TestClient(app) as c:
+        me = c.get("/api/auth/me")  # feat/auth：ZM_AUTH_REQUIRED=1 时先注册登录（cookie 罐保存会话）
+        if me.status_code != 404 and (me.json() or {}).get("auth_required"):
+            rr = c.post("/api/auth/register", json={"username": "qadown" + uuid.uuid4().hex[:8],
+                                                    "password": "Zm-QA-pass-2026!", "nickname": "QA"})
+            assert rr.status_code == 201, rr.text[:200]
         def sse(path, body):
             r = c.post(path, json=body, timeout=300)
             return parse_sse(r.text)

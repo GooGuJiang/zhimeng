@@ -137,7 +137,7 @@ def test_register_duplicate_email_409(client):
 
 
 @pytest.mark.parametrize("username, field_code", [
-    ("ab", "validation_error"), ("_abc", "validation_error"), ("has space", "validation_error"),
+    ("ab", "validation_error"), ("_abc", "validation_error"), ("1abc", "validation_error"), ("has space", "validation_error"),
     ("a" * 21, "validation_error"), ("中文名", "validation_error"),
     ("admin", "username_reserved"), ("Demo", "username_reserved"),
 ])
@@ -150,7 +150,7 @@ def test_register_username_rules(client, username, field_code):
 
 
 @pytest.mark.parametrize("pw, why", [("Ab1", "过短"), ("abcdefgh", "无数字"), ("12345678", "无字母"),
-                                     ("SELF", "等于用户名")])
+                                     ("SELF", "等于用户名"), ("Ab1" + "x" * 62, "超过 64 位（§13）")])
 def test_register_weak_password(client, pw, why):
     name = unique_name("weak")
     r, _ = register_user(client, name, password=name if pw == "SELF" else pw)
@@ -632,3 +632,19 @@ def test_avatar_upload_rules(client, anon):
     assert anon.c.post("/api/users/me/avatar", files={"file": ("a.png", _png(), "image/png")}).status_code == 401
     d = u.delete("/api/users/me/avatar")
     assert d.status_code == 200 and d.json()["avatar_url"] is None
+
+
+# ======================= 演示账号（旧数据） =======================
+@pytest.mark.skipif(bool(LIVE), reason="读取进程内临时数据目录中的 demo_password.txt，仅进程内模式")
+def test_demo_account_login_sees_demo_worlds(client):
+    """README「登录演示账号看旧数据」：demo + demo_password.txt（或 ZM_DEMO_PASSWORD）可登录，看到归 u_demo 的世界。"""
+    pw = os.getenv("ZM_DEMO_PASSWORD") or (Path(os.environ["ZM_DATA_DIR"]) / "demo_password.txt").read_text().strip()
+    r = login_user(client, "demo", pw)
+    assert r.status_code == 200, r.text[:200]
+    u = r.json()["user"]
+    assert u["id"] == "u_demo" and u["is_demo"] is True
+    demo = UserApi(client, credentials(r))
+    for w in demo.get("/api/worlds").json():
+        assert w.get("owner_id") == "u_demo"
+    ro = demo.patch("/api/users/me", {"nickname": "改名"})
+    assert ro.status_code == 403 and code(ro) == "demo_readonly", ro.text[:200]

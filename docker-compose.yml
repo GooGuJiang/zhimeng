@@ -6,7 +6,7 @@ name: zhimeng
 services:
   backend:
     build: ./backend
-    image: zhimeng-backend:latest
+    image: zhimeng-backend:${ZM_IMAGE_TAG:-latest}
     env_file:
       - path: .env
         required: false
@@ -32,9 +32,12 @@ services:
       - zm-chroma:/data/chroma   # ChromaDB 向量库
       - zm-assets:/data/assets   # 生成的插画 / 配音
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      # 只绑定本机回环：浏览器只需访问前端（/api 经内部网络代理）。后端信任私网段转发的 X-Forwarded-For，
+      # 若对外开放该端口，外部可伪造 XFF 绕过按 IP 限流；本机 curl / E2E 的 request 夹具仍可直连。
+      # 确需对外暴露后端时设 BACKEND_BIND=0.0.0.0，并同时把 ZM_TRUSTED_PROXIES 收窄到前端容器所在网段
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
       interval: 15s
       timeout: 5s
       start_period: 30s
@@ -49,7 +52,7 @@ services:
         ZM_PROXY_TIMEOUT_MS: ${ZM_PROXY_TIMEOUT_MS:-180000}
         # 前端可见 AI 标识（构建期写入）：默认隐藏，=1 恢复「内容由AI生成」徽标
         NEXT_PUBLIC_ZM_SHOW_AI_LABEL: ${ZM_SHOW_AI_LABEL:-0}
-    image: zhimeng-frontend:latest
+    image: zhimeng-frontend:${ZM_IMAGE_TAG:-latest}
     environment:
       BACKEND_ORIGIN: http://backend:8000
     ports:
