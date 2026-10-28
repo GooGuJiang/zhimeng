@@ -1,4 +1,4 @@
-import { API_BASE, ApiError, errorText, toApiError } from "./api";
+import { ApiError, authedFetch, errorText, toApiError } from "./api";
 
 export type SSEHandler = (event: string, data: unknown) => void;
 
@@ -14,7 +14,8 @@ export async function streamSSE(
 ): Promise<void> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/api${path}`, {
+    // auth is checked before the stream starts (401 JSON), so token_expired is refreshed + retried here too
+    res = await authedFetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify(body ?? {}),
