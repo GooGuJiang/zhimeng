@@ -83,6 +83,7 @@ def trusted(ip) -> bool:  # noqa: ANN001
 
 
 _warned_no_xff = False
+_WARN_PATHS = frozenset({"/api/auth/login", "/api/auth/register", "/api/auth/refresh"})
 
 
 def client_ip(scope, headers: dict[str, str]) -> str | None:  # noqa: ANN001
@@ -108,7 +109,9 @@ def client_ip(scope, headers: dict[str, str]) -> str | None:  # noqa: ANN001
     real = _ip(headers.get("x-real-ip", ""))
     if real:
         return str(real)
-    if not _warned_no_xff:
+    # AUTH-QA-6：只在会用到按 IP 限流的鉴权写接口上告警（健康检查等本机直连不算配置错误）
+    path = scope.get("path") or ""
+    if not _warned_no_xff and path in _WARN_PATHS:
         _warned_no_xff = True
         import logging
         logging.getLogger("zhimeng.auth").warning(

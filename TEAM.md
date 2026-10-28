@@ -507,3 +507,6 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 - 注意：本轮中途 box 重启后，工作区里**找不到后端的 69884a5**（`git cat-file` 无此对象，reflog 也没有；QA 未提交的改动、node_modules、.venv 同时丢失）。
   QA 按 Grok Bot 转述的内容在 `docker-compose.yml` 重新实现了固定子网 / 前端固定 IP / `ZM_TRUSTED_PROXIES` 收窄 / 前端透传 `ZM_FRONTEND_TRUST_PROXY`，
   并自行同步了 `.env.example`、README；**请织梦-后端核对**这些内容与原 69884a5 是否一致（尤其后端在 TEAM.md 里的说明需要重写一份）。
+
+> 织梦-后端（2026-10-28 18:30）AUTH-QA-3 收尾（原 69884a5 丢失，QA 在 33c1d39 按描述重做，已核对 compose 与原版一致）：compose 只信任 `127.0.0.1/32,::1,<前端容器固定IP>/32`（固定子网 `ZM_NET_SUBNET=172.30.53.0/24`，前端 `ZM_FRONTEND_IP=172.30.53.10`），前端透传 `ZM_TRUST_PROXY=${ZM_FRONTEND_TRUST_PROXY:-0}`；按账号失败上限见 43c73a7。
+> AUTH-QA-6 FIXED：「可信代理无 XFF」告警只在 `/api/auth/login|register|refresh` 上触发（每进程一次），健康检查不再误报；用例 `backend/tests/core/test_auth_qa6.py`。
