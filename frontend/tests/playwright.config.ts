@@ -14,7 +14,8 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: [["list"]],
-  outputDir: "../test-results/mock",
+  // outside the shared worktree (AUTH-QA-5): parallel Playwright runs must not wipe each other's results
+  outputDir: process.env.ZM_PW_OUT ?? "/tmp/fe-pw-out",
   use: {
     ...devices["Desktop Chrome"],
     baseURL: process.env.ZM_WEB ?? "http://localhost:3000",
