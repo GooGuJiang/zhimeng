@@ -30,6 +30,7 @@ services:
       ZM_LOGIN_ACCOUNT_WINDOW_MIN: ${ZM_LOGIN_ACCOUNT_WINDOW_MIN:-15}
       ZM_LOGIN_ACCOUNT_LOCK_MIN: ${ZM_LOGIN_ACCOUNT_LOCK_MIN:-15}
       ZM_REGISTER_GLOBAL_PER_HOUR: ${ZM_REGISTER_GLOBAL_PER_HOUR:-200}
+      ZM_REGISTER_PER_HOUR: ${ZM_REGISTER_PER_HOUR:-10}            # 同一来源 IP 每小时注册上限（直接 compose 时所有访问者同源，见 README）
       ZM_COOKIE_SECURE: ${ZM_COOKIE_SECURE:-0}       # 走 https 时设 1
       # 写接口校验 Origin：浏览器访问前端用的地址必须在白名单内（换端口/域名/IP 访问时在 .env 设 ZM_CORS_ORIGINS）
       ZM_CORS_ORIGINS: ${ZM_CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}

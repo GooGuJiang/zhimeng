@@ -346,6 +346,20 @@ docker compose down               # 停止（数据保留在命名卷中）；do
   3. 反代与 compose 不在同一宿主或经过多层代理时，按层数设置后端 `ZM_PROXY_HOPS` 并相应调整 `ZM_TRUSTED_PROXIES`。
   另一种做法是 dockerd 设置 `"userland-proxy": false`（iptables DNAT 保留外部来源地址；本机回环访问仍显示为网关）。
 - 按账号上限（10 次 / 15 分钟）与 IP 无关，无论部署方式都生效。
+- **演示 / 答辩等多人现场注册**：按 IP 的规则不放宽（AUTH-QA-7，Grok Bot 决定），但直接 `docker compose up` 时所有人同源，
+  可在 `.env` 把下列阈值临时调大（均已在 compose 里透传，改完 `docker compose up -d` 重建后端容器即生效，结束后改回默认）：
+
+  ```bash
+  # .env —— 演示/答辩场景示例（默认值见注释）
+  ZM_REGISTER_PER_HOUR=200          # 同一来源 IP 每小时注册上限（默认 10；直接 compose 时即全站共享）
+  ZM_REGISTER_GLOBAL_PER_HOUR=500   # 全站每小时注册上限（默认 200）
+  ZM_LOGIN_ACCOUNT_MAX_FAILS=20     # 同一账号窗口内允许失败次数（默认 10）
+  ZM_LOGIN_ACCOUNT_WINDOW_MIN=15    # 按账号计数窗口，分钟（默认 15）
+  ZM_LOGIN_ACCOUNT_LOCK_MIN=5       # 按账号锁定时长，分钟（默认 15）
+  ```
+
+  注意：「同一 IP + 账号 5 次失败锁 5 分钟」「同一 IP 累计 20 次失败锁 15 分钟」目前是代码内固定值，不能用环境变量调整；
+  现场请提醒大家输错密码不要反复重试；重启后端不会清除计数（计数存在数据库里），只能等锁定到期自动解除。
 
 ## 实际取舍
 
