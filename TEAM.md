@@ -404,3 +404,20 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 10. 偏好下限：`minor_mode:true` 时，生成世界的 `minor_mode` 必为 true，rating 不高于 teen；`PATCH /worlds/{id}/settings` 时传 `minor_mode:false` 会被忽略，响应头带 `X-ZM-Clamped`。关闭未成年人模式要带 `current_password`。
 11. 头像只收 png/jpeg/webp，最大 2MB，转成 256×256 webp；类型不对返回 415，超大返回 413，文件损坏返回 400 `invalid_image`。
 12. `/api/health` 返回 `auth.required`；`GET /api/debug/status` 未登录且没有 admin token 时返回 401。
+
+## QA：账号/鉴权测试与问题记录（织梦-测试文档，feat/auth）
+**用例位置**
+- API：`backend/tests/integration/test_auth.py`（契约 v1.4-draft2；后端未实现 `/api/auth/*` 时整模块 skip）。`conftest.py` 新增多用户辅助：
+  每个用户独立客户端身份（显式 `Cookie: zm_access=…; zm_refresh=…`，不共享 cookie 罐）、每个用户独立来源 IP（进程内客户端伪装成
+  `127.0.0.1` 代理 + `X-Forwarded-For`），注册/登录限流互不干扰。`ZM_AUTH_REQUIRED=1` 时原 AC 冒烟自动以新注册的 QA 用户运行。
+- 两种模式都要跑：`scripts/qa.sh api` 先默认（匿名 = `u_demo`）跑一遍，再 `ZM_AUTH_REQUIRED=1` 跑一遍；模式专属用例在另一模式下 skip。
+- E2E：`tests/e2e/auth.spec.ts`（注册→登出→登录→建世界→个人中心「我的作品」可见→B 看不到（列表/直达链接/API 404）→退出后 /me 跳登录页）。
+  `tests/e2e/global-setup.ts`：`ZM_AUTH_REQUIRED=1` 时注册 QA 用户并把会话写入 `.auth/state.json`（已 gitignore），AC 用例与 `request` 夹具共用。
+- 页面 testid 以前端实现为准：`register-form/-username/-nickname/-password/-confirm/-submit`、`login-form/-username/-password/-submit/-error`、
+  `user-menu-btn`、`user-nickname`、`user-menu-logout`、`auth-login-link`、`me-page`、`me-tab-works`、`works-list`、`work-item`。
+
+**问题记录**（状态：OPEN / FIXED / VERIFIED）
+| ID | 负责 | 问题 | 复现 | 预期 | 状态 |
+|---|---|---|---|---|---|
+| AUTH-QA-1 | 织梦-后端 | Docker 部署下限流按 IP 失真：浏览器经前端容器（Next 代理）访问后端，对端是前端容器 IP 而非 127.0.0.1，`ZM_TRUST_PROXY` 不采信 `X-Forwarded-For`，所有用户共用一个 IP。同 IP 15 分钟 20 次登录失败锁 15 分钟、每小时 10 次注册 → 一人输错/批量注册会锁住全站 | `docker compose up`；用不同账号经 :3000 连续输错密码 20 次 → 第三个账号正确密码也 429；或注册 11 个账号 → 第 11 个 429 | 支持可配置的可信代理（如 `ZM_TRUSTED_PROXIES=172.16.0.0/12` 或 compose 网段），compose 里给默认值；或对私网对端也采信 XFF 首段 | OPEN（待 Docker 实测确认） |
+| AUTH-QA-2 | 织梦-前端 / 织梦-后端 | 用户名规则前后端不一致：前端要求字母开头（`^[A-Za-z][A-Za-z0-9_]*$`），后端允许数字开头（只禁止下划线开头）；密码上限前端 64、后端 72 | 注册 `1abc` 前端拦截，直接调 API 成功 | 统一一处规则（建议以契约 §4 为准，前端放宽到不以下划线开头、上限 72） | OPEN（非阻塞） |

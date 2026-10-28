@@ -14,7 +14,7 @@ AI 生成的不是一段文字，而是一个包含角色、地点、规则、�
 ## 目录
 
 - [系统架构](#系统架构) · [技术栈](#技术栈) · [功能模块 F1–F10](#功能模块-f1f10)
-- [快速开始](#快速开始) · [环境变量](#环境变量) · [测试](#测试) · [界面说明](#界面说明) · [演示脚本](#演示脚本) · [团队分工](#团队分工)
+- [账号与个人中心](#账号与个人中心) · [快速开始](#快速开始) · [环境变量](#环境变量) · [测试](#测试) · [界面说明](#界面说明) · [演示脚本](#演示脚本) · [团队分工](#团队分工)
 
 ## 系统架构
 
@@ -103,6 +103,22 @@ flowchart LR
 | F9 | 安全与合规 | 输入/输出双向过滤（关键词 + 模型审核）、内容分级、未成年人模式、危机内容拦截并给出求助热线、举报入口、全部 AI 内容带 `ai_generated`/`ai_label` 字段与隐式元数据；可见“内容由AI生成”标识按用户要求默认隐藏（`ZM_SHOW_AI_LABEL=1` 恢复） |
 | F10 | 文化/教育模式 | 课文/史料/非遗 → 可走进的互动世界；知识卡片随剧情解锁；学习小结（要点、时间线、小测验、反思） |
 
+## 账号与个人中心
+
+《织梦》支持注册/登录，每个用户的世界、存档、资产、举报、学习记录**只属于自己**（接口契约见 [API.md](API.md)「用户系统接口契约」）。
+
+- **页面**：`/register` 注册（账号、昵称、密码；邮箱选填）、`/login` 登录（账号或邮箱，不区分大小写）、`/me` 个人中心
+  （概览统计、个人资料与头像、账号安全/改密码、我的作品、学习记录、偏好设置）。顶栏显示头像与昵称，菜单里可退出。
+- **会话**：后端下发 httpOnly + SameSite=Lax 的 `zm_access`（30 分钟）/`zm_refresh`（30 天，每次刷新轮换并检测重放）两个 cookie，
+  浏览器脚本拿不到 token；前端经同源 `/api` 代理调用，`access` 过期时自动刷新一次。登出会吊销当前会话；改密码让其他设备全部下线。
+- **密码**：argon2id 哈希存储，任何接口都不返回；8–72 位且同时含字母和数字、不能等于用户名、不能是常见弱密码。
+  登录失败同一 IP + 账号 15 分钟 5 次锁 5 分钟（429，`Retry-After`），同 IP 每小时最多注册 10 个账号。
+- **数据隔离**：世界及其回合、记忆、事件、资产、海报、导出、举报都按世界的 `owner_id` 归属；访问别人的资源一律 **404**（不暴露是否存在）。
+  导入存档得到的是归导入者所有的新世界。
+- **匿名/演示账号**：`ZM_AUTH_REQUIRED=0`（默认，过渡期）时未登录请求按演示账号 `demo` 处理，原有演示流程不登录也能走通；
+  `ZM_AUTH_REQUIRED=1` 时未登录访问世界、资产、个人中心等接口返回 401，前端跳转登录页。修改资料/密码/头像始终需要真实登录。
+- **未成年人模式**：可在个人中心偏好里开启，作为新建世界的默认值和下限（请求只能更严格）；关闭时需输入当前密码（家长确认）。
+
 ## 快速开始
 
 ### 依赖
@@ -161,6 +177,14 @@ pnpm dev            # http://localhost:3000
 | `RETRIEVAL_BUDGET_S` | `1.2` | 记忆向量检索时间预算，超时跳过检索 |
 | `KEY_SCENE_MEDIA_DEADLINE_S` | `3` | 关键场景插画/配音在回合流中的最长等待（秒）；超时先返回 `pending` 占位，后台原地升级（同 id，`GET /api/assets/{id}?wait=` 可长轮询） |
 | `ZM_ADMIN_TOKEN` | 空 | 管理员令牌：`GET /api/reports` 不带 `world_id` 查看全量举报需请求头 `X-Admin-Token` 一致；为空则禁用全量列表 |
+| `ZM_AUTH_REQUIRED` | `0` | 账号系统：`1` = 未登录访问受保护接口返回 401；`0` = 未登录按演示账号 `demo` 处理（上线前建议设 1） |
+| `ZM_JWT_SECRET` | 空（自动生成） | 会话签名密钥。为空时首次启动生成 64 字节写入 `$ZM_DATA_DIR/jwt_secret`（0600）并沿用；更换会让所有登录失效。不写日志、不出现在 `/api/health` |
+| `ZM_DEMO_PASSWORD` | 空（自动生成） | 演示账号 `demo` 的密码；为空时随机生成写入 `$ZM_DATA_DIR/demo_password.txt`（0600），日志只打印路径 |
+| `ZM_ACCESS_TTL_MIN` / `ZM_REFRESH_TTL_DAYS` | `30` / `30` | access / refresh 会话有效期 |
+| `ZM_COOKIE_SECURE` | `0` | `1` = cookie 带 Secure（仅 https）；本地 http 保持 0 |
+| `ZM_CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | 来源白名单：CORS（带凭据，不能用 `*`）+ 写接口 Origin 校验。用其它域名/IP/端口访问前端时必须加入 |
+| `ZM_TRUST_PROXY` | `1` | 仅当对端是本机（Next 代理）时采信 `X-Forwarded-For`，用于按真实 IP 限流 |
+| `ZM_AVATAR_MAX_BYTES` / `ZM_REGISTER_PER_HOUR` | `2097152` / `10` | 头像大小上限 / 同 IP 每小时注册上限 |
 | `BACKEND_PORT` / `FRONTEND_PORT` | `8000` / `3000` | dev.sh 使用的端口 |
 | `BACKEND_ORIGIN` | `http://localhost:8000` | Next.js 反向代理目标 |
 | `ZM_PROXY_TIMEOUT_MS` | `180000` | Next 反向代理超时（毫秒）；Next 16 默认 30s 会让长请求 socket hang up（BUG-007）；修改后需重新 build / 启动前端 |
@@ -170,14 +194,16 @@ pnpm dev            # http://localhost:3000
 
 ```bash
 scripts/qa.sh            # API 冒烟 + E2E，结果写入 docs/qa-report.md
-scripts/qa.sh api        # 只跑 API 冒烟 + 包级契约测试（进程内、兜底模式、临时数据目录，无需启动服务）
+scripts/qa.sh api        # 只跑 API 冒烟 + 包级契约测试 + 账号/鉴权（进程内、兜底模式、临时数据目录，无需启动服务；
+                         #   默认模式与 ZM_AUTH_REQUIRED=1 各跑一遍）
 scripts/qa.sh api-real   # 同上但走真实模型（DASHSCOPE_API_KEY 取自环境或 .env；输出中的密钥自动打码）
 scripts/qa.sh e2e        # 只跑 E2E（需应用已运行）
 backend/.venv/bin/python scripts/ttft.py --turns 5   # 对运行中的服务测首字延迟 / 世界预览耗时（只输出数字）
 
 # E2E（需先 scripts/dev.sh 启动应用；使用系统 Chrome）
 cd tests/e2e && pnpm install
-pnpm test                         # AC-1 ~ AC-9
+pnpm test                         # AC-1 ~ AC-9 + 账号用例 auth.spec.ts（注册→登录→建世界→个人中心→他人不可见→退出）
+ZM_AUTH_REQUIRED=1 的后端上跑 pnpm test  # global-setup 自动注册 QA 用户，AC 用例以登录身份运行
 ZM_MODE=real pnpm test            # 真实模型模式（放宽超时；回合被限流失败时像用户一样点「重试」，次数记入测试注解）
 pnpm demo                         # 跑附录演示脚本并截图到 docs/screens/（ZM_MODE=real pnpm demo 用真实模型）
 
@@ -187,6 +213,17 @@ cd frontend && ZM_WEB=http://localhost:3000 pnpm test:mock
 # API 冒烟打到运行中的服务（例如真实模型模式）
 ZM_API_BASE=http://localhost:8000 backend/.venv/bin/python -m pytest backend/tests/integration -q
 ```
+
+账号/鉴权测试：
+
+```bash
+# 只跑账号/鉴权（进程内、兜底模式；限流按每个测试用户独立的来源 IP 隔离，互不影响）
+ZM_FORCE_FALLBACK=1 ZM_DISABLE_IMAGE=1 backend/.venv/bin/python -m pytest backend/tests/integration/test_auth.py -q
+ZM_AUTH_REQUIRED=1 ZM_FORCE_FALLBACK=1 ZM_DISABLE_IMAGE=1 backend/.venv/bin/python -m pytest backend/tests/integration -q  # 强制登录模式全套
+cd tests/e2e && pnpm exec playwright test auth.spec.ts      # E2E 账号流程（需应用已运行）
+```
+
+所有测试一律兜底模式（`ZM_FORCE_FALLBACK=1`）+ `ZM_DISABLE_IMAGE=1`，不调用真实生图、配音和大模型。
 
 验收用例与测试的对应关系见 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)，已知问题见 [BUGS.md](BUGS.md)。
 
@@ -252,7 +289,11 @@ docker compose down               # 停止（数据保留在命名卷中）；do
 - 镜像：`backend/Dockerfile`（python:3.12-slim，`uvicorn app.main:app` 监听 8000，非 root）、`frontend/Dockerfile`（pnpm 多阶段，Next standalone，`node server.js` 监听 3000）。
 - 代理：浏览器只访问前端；`/api/*`（含生成资产 `/api/static/assets`）经 compose 内部网络转发到 `http://backend:8000`。Next 的 rewrites 在**构建期**确定，
   因此后端地址以构建参数 `BACKEND_ORIGIN` 传入（compose 已设置），代理超时 `ZM_PROXY_TIMEOUT_MS` 同理。
-- 数据：命名卷 `zm-db`（`/data`，SQLite `zhimeng.db`）、`zm-chroma`（`/data/chroma`，ChromaDB）、`zm-assets`（`/data/assets`，插画/配音）。
+- 账号：不填 `.env` 也能直接启动。`ZM_JWT_SECRET` / `ZM_DEMO_PASSWORD` 为空时由后端首次启动自动生成，保存在命名卷 `zm-db`
+  （`/data/jwt_secret`、`/data/demo_password.txt`，0600），因此 `docker compose down` 后再 `up`，账号、会话和数据都还在（`down -v` 才会清空）。
+  查看演示账号密码：`docker compose exec backend cat /data/demo_password.txt`。默认 `ZM_AUTH_REQUIRED=0`，正式对外时在 `.env` 设 `ZM_AUTH_REQUIRED=1`；
+  走 https 时设 `ZM_COOKIE_SECURE=1`；用 `localhost:3000` 以外的地址访问时，把该地址加入 `ZM_CORS_ORIGINS`（否则写操作返回 403）。
+- 数据：命名卷 `zm-db`（`/data`，SQLite `zhimeng.db`，含用户表；头像在 `/data/avatars`）、`zm-chroma`（`/data/chroma`，ChromaDB）、`zm-assets`（`/data/assets`，插画/配音）。
 - 密钥：`DASHSCOPE_API_KEY` 来自 `.env`（`env_file` 与 `${DASHSCOPE_API_KEY:-}`），只进入后端容器；为空时入口脚本强制 `ZM_FORCE_FALLBACK=1`，全流程可离线演示。
 - 成本：compose 默认 `ZM_DISABLE_IMAGE=1`（插画用占位 SVG，不调用百炼生图）；需要真实插画时在 `.env` 设 `ZM_DISABLE_IMAGE=0`。
 - 端口冲突：如本机已用 `scripts/dev.sh` 占用 3000/8000，先 `scripts/stop.sh`（只按端口停进程），或在 `.env` 改 `FRONTEND_PORT` / `BACKEND_PORT`。

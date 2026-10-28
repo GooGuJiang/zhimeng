@@ -17,8 +17,14 @@ services:
       ZM_DISABLE_IMAGE: ${ZM_DISABLE_IMAGE:-1}
       # 可见 AI 标识（占位图角标 / 万相 "AI生成" 水印）：用户要求默认隐藏；ZM_SHOW_AI_LABEL=1 恢复
       ZM_SHOW_AI_LABEL: ${ZM_SHOW_AI_LABEL:-0}
+      # 账号系统（feat/auth）：不填 .env 也能起。JWT 密钥 / 演示账号密码未设置时由后端首次启动自动生成，
+      # 写入 /data/jwt_secret、/data/demo_password.txt（0600，位于命名卷 zm-db，down/up 后会话与账号保持有效）
+      ZM_AUTH_REQUIRED: ${ZM_AUTH_REQUIRED:-0}       # 1 = 必须登录；0 = 匿名按演示账号 demo
+      ZM_COOKIE_SECURE: ${ZM_COOKIE_SECURE:-0}       # 走 https 时设 1
+      # 写接口校验 Origin：浏览器访问前端用的地址必须在白名单内（换端口/域名/IP 访问时在 .env 设 ZM_CORS_ORIGINS）
+      ZM_CORS_ORIGINS: ${ZM_CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}
     volumes:
-      - zm-db:/data              # SQLite（/data/zhimeng.db）
+      - zm-db:/data              # SQLite（/data/zhimeng.db，含用户表）、jwt_secret、demo_password.txt、avatars/
       - zm-chroma:/data/chroma   # ChromaDB 向量库
       - zm-assets:/data/assets   # 生成的插画 / 配音
     ports:

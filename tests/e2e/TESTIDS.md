@@ -45,3 +45,12 @@ but test ids make the suite stable. Page routes are discovered by clicking, not 
 | Edu | `edu-summary-btn` / `edu-summary` | 「学习小结」/「小结」 | |
 | Edu | `edu-summary-pending` | — | v1.2 先显示的本地小结，随后替换为 AI 版 |
 | Edu | `edu-summary-loading` / `edu-summary-error` / `edu-summary-retry` | 「重试」 | 小结加载中 / 失败 / 重试（BUG-007） |
+
+## 账号（feat/auth，前端已实现的 testid）
+| Area | data-testid | Notes |
+|---|---|---|
+| Register | `register-form` / `register-username` / `register-nickname` / `register-password` / `register-confirm` / `register-submit` / `register-error` | `/register` |
+| Login | `login-form` / `login-username` / `login-password` / `login-submit` / `login-error` | `/login?next=` |
+| Header | `user-menu-btn` / `user-nickname` / `user-avatar` / `user-menu` / `user-menu-profile` / `user-menu-logout` / `auth-login-link` / `auth-register-link` | 未登录显示登录/注册链接 |
+| Me | `me-page` / `me-nickname` / `me-tab-<overview|profile|security|works|learning|prefs>` / `me-panel-<tab>` | `/me?tab=works` 直达 |
+| Works | `works-list` / `work-item` / `works-loading` / `works-empty` | 我的作品 |

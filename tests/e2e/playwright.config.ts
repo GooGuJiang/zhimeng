@@ -12,6 +12,8 @@ process.env.ZM_DISABLE_IMAGE ??= "1"; // 供 helpers 检查 /api/health 时参�
 
 export default defineConfig({
   testDir: ".",
+  // feat/auth：ZM_AUTH_REQUIRED=1 时以 QA 用户登录（见 global-setup.ts）；auth.spec.ts 自己用空状态
+  globalSetup: "./global-setup.ts",
   testMatch: /.*\.spec\.ts/,
   timeout: real ? 600_000 : 180_000,
   expect: { timeout: real ? 90_000 : 20_000 },
@@ -29,6 +31,7 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "off",
+    storageState: ".auth/state.json",
   },
   projects: [
     { name: "ac", testIgnore: /(demo|mobile)\.spec\.ts/, use: { ...devices["Desktop Chrome"], channel: "chrome", viewport: { width: 1440, height: 900 } } },

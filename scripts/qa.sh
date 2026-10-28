@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # QA 一键回归：API 冒烟 (pytest, 进程内兜底模式) + Playwright E2E (需应用已运行)
 #   scripts/qa.sh            # 全部
-#   scripts/qa.sh api        # 只跑 API 冒烟（兜底模式）
+#   scripts/qa.sh api        # 只跑 API 冒烟（兜底模式；含账号/鉴权 test_auth.py，默认与 ZM_AUTH_REQUIRED=1 各跑一遍）
 #   scripts/qa.sh api-real   # API 冒烟 + 契约测试走真实模型（DASHSCOPE_API_KEY 取自环境或 .env，输出中密钥一律打码）
 #   scripts/qa.sh e2e        # 只跑 E2E（ZM_WEB / ZM_API 可覆盖地址）
 # 结果写入 docs/qa-report.md
@@ -39,7 +39,13 @@ if [[ "$WHAT" == all || "$WHAT" == api ]]; then
   echo "== API smoke (fallback, in-process) =="
   OUT=$(cd backend && ZM_FORCE_FALLBACK=1 .venv/bin/python -m pytest tests/integration -q -rA --no-header -p no:cacheprovider 2>&1 | mask); API_RC=${PIPESTATUS[0]}
   echo "$OUT" | tail -40
-  { echo; echo "## API 冒烟 (pytest, 兜底) rc=$API_RC"; echo; echo '```'; echo "$OUT" | grep -E "^(PASSED|FAILED|ERROR)|passed|failed|error" | tail -40; echo '```'; } >> "$REPORT"
+  { echo; echo "## API 冒烟 (pytest, 兜底, ZM_AUTH_REQUIRED=0 匿名=演示账号) rc=$API_RC"; echo; echo '```'; echo "$OUT" | grep -E "^(PASSED|FAILED|ERROR)|passed|failed|error" | tail -40; echo '```'; } >> "$REPORT"
+  # feat/auth：强制登录模式再跑一遍（原 AC 冒烟以新注册的 QA 用户运行；test_auth 覆盖匿名 401）
+  echo "== API smoke (fallback, ZM_AUTH_REQUIRED=1) =="
+  OUT=$(cd backend && ZM_AUTH_REQUIRED=1 ZM_FORCE_FALLBACK=1 .venv/bin/python -m pytest tests/integration -q -rA --no-header -p no:cacheprovider 2>&1 | mask); RC2=${PIPESTATUS[0]}
+  echo "$OUT" | tail -40
+  API_RC=$(( API_RC | RC2 ))
+  { echo; echo "## API 冒烟 (pytest, 兜底, ZM_AUTH_REQUIRED=1) rc=$RC2"; echo; echo '```'; echo "$OUT" | grep -E "^(PASSED|FAILED|ERROR)|passed|failed|error" | tail -40; echo '```'; } >> "$REPORT"
 fi
 if [[ "$WHAT" == all || "$WHAT" == e2e ]]; then
   WEB="${ZM_WEB:-http://localhost:3000}"
