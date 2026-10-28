@@ -20,7 +20,7 @@ export const TABS: { key: string; label: string; icon: LucideIcon }[] = [
 const fmtDate = (s?: string | null) => (s ? new Date(s).toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" }) : "");
 
 export function MeView() {
-  const { user, actingAs } = useAuth();
+  const { user, actingAs, authRequired } = useAuth();
   const router = useRouter();
   const path = usePathname() ?? "/me";
   const params = useSearchParams();
@@ -46,7 +46,9 @@ export function MeView() {
           </div>
           {!user || user.is_demo ? (
             <p className="muted me-bio" data-testid="me-demo">
-              当前为演示账号，数据会和其他未登录的访客共用。
+              {authRequired
+                ? "当前为演示账号，用来查看升级前的旧数据。"
+                : "当前为演示账号，数据会和其他未登录的访客共用。"}
               <Link href={loginHref("/me")}>登录</Link>或<Link href={`/register?next=${encodeURIComponent("/me")}`}>注册</Link>
               后保存到你自己的账号。
             </p>

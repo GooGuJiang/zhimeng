@@ -1020,8 +1020,8 @@ export function PrefsPanel() {
               </form>
             ) : null}
             <div className="form-field">
-              <span className="label">内容分级</span>
-              <div className="chips" role="radiogroup" aria-label="内容分级">
+              <span className="label">新建世界的默认分级</span>
+              <div className="chips" role="radiogroup" aria-label="新建世界的默认分级">
                 {RATINGS.map((r) => (
                   <button
                     key={r.key}
@@ -1037,7 +1037,11 @@ export function PrefsPanel() {
                   </button>
                 ))}
               </div>
-              {s.data.minor_mode ? <span className="field-hint">未成年人模式下固定为全年龄</span> : null}
+              <span className="field-hint">
+                {s.data.minor_mode
+                  ? "未成年人模式下固定为全年龄"
+                  : "只是默认值，创建世界时仍可单独选择；未成年人模式开启后才会限制分级"}
+              </span>
             </div>
             <label className="switch">
               <input

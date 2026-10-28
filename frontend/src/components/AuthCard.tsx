@@ -7,7 +7,7 @@ import { BrandMark } from "./AppShell";
 export function AuthCard({ title, sub, children, foot }: { title: string; sub: string; children: ReactNode; foot: ReactNode }) {
   return (
     <div className="auth-page">
-      <section className="auth-card card" aria-labelledby="auth-title">
+      <section className="auth-card card">
         <Link href="/" className="auth-brand" aria-label="返回织梦首页">
           <BrandMark className="brand-mark" /> 织梦
         </Link>

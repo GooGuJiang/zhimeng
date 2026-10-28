@@ -240,7 +240,7 @@ export async function mockAuth(page: Page, init: Partial<AuthMock> = {}): Promis
     if (path === "/auth/register" && method === "POST") {
       const b = body as { username: string; password: string; nickname: string; email?: string };
       if (st.users.some((u) => u.user.username.toLowerCase() === b.username.toLowerCase()))
-        return err(r, 409, "username_taken", "该用户名已被注册", { field: "username" });
+        return err(r, 409, "username_taken", "用户名已被占用", { field: "username" });
       if (b.email && st.users.some((u) => u.user.email === b.email!.toLowerCase()))
         return err(r, 409, "email_taken", "该邮箱已被其他账号使用", { field: "email" });
       if (b.password === "Password123") return err(r, 400, "weak_password", "密码过于常见，请换一个", { field: "password" });

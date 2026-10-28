@@ -226,7 +226,6 @@ export function authErrorFor(e: unknown, fieldAlias: Record<string, string> = {}
   const serverField = typeof e.body?.field === "string" ? (e.body.field as string) : undefined;
   if (e.code === "rate_limited" || e.status === 429)
     return { message: "尝试次数过多，请稍后再试", retryAfter: e.retryAfter ?? 60 };
-  if (serverField) return { field: pick(serverField), message: e.message };
   const byCode: Record<string, { field?: string; message: string }> = {
     username_taken: { field: "username", message: "该用户名已被注册，换一个试试，或直接登录" },
     username_reserved: { field: "username", message: "这个用户名是保留名，请换一个" },
@@ -245,11 +244,15 @@ export function authErrorFor(e: unknown, fieldAlias: Record<string, string> = {}
     token_expired: { message: "登录已过期，请重新登录" },
     refresh_invalid: { message: "登录已过期，请重新登录" },
   };
+  // these always use the frontend's wording (consistent copy, e.g. 「已被注册」), placed on the server's field
+  const OWN_COPY = ["username_taken", "email_taken", "invalid_credentials", "same_password"];
   const hit = e.code ? byCode[e.code] : undefined;
+  if (hit && OWN_COPY.includes(e.code!)) return { field: pick(serverField ?? hit.field), message: hit.message };
+  if (serverField) return { field: pick(serverField), message: e.message };
   if (hit) {
     // prefer the server's own Chinese detail when it has one
     const msg = /[\u4e00-\u9fff]/.test(e.message) && e.status < 500 ? e.message : hit.message;
-    return { field: pick(hit.field), message: e.code === "invalid_credentials" ? hit.message : msg };
+    return { field: pick(hit.field), message: msg };
   }
   if (e.status === 401) return { message: "用户名或密码错误" };
   return { message: e.message };

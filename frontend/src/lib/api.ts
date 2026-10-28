@@ -198,7 +198,8 @@ export async function request<T>(path: string, init?: Init): Promise<T> {
   }
   if (!res.ok) {
     const err = await toApiError(res);
-    console.warn(`[api] ${path} → ${res.status}`, err.raw?.slice(0, 300));
+    // an anonymous /auth/me 401 is the normal "not signed in" answer (contract §3.5), not a problem
+    if (!(path === "/auth/me" && res.status === 401)) console.warn(`[api] ${path} → ${res.status}`, err.raw?.slice(0, 300));
     throw err;
   }
   onHeaders?.(res.headers);

@@ -79,7 +79,7 @@ test.describe("注册", () => {
     await page.getByTestId("register-password").fill("Weave2026dream");
     await page.getByTestId("register-confirm").fill("Weave2026dream");
     await page.getByTestId("register-submit").click();
-    await expect(field(page, "register-username")).toHaveText("该用户名已被注册");
+    await expect(field(page, "register-username")).toHaveText("该用户名已被注册，换一个试试，或直接登录");
     await expect(page.getByTestId("register-username")).toBeFocused();
 
     await page.getByTestId("register-username").fill("xiaoyu2");
