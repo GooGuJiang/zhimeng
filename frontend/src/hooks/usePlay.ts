@@ -59,6 +59,8 @@ export function usePlay(worldId: string) {
   const [loaded, setLoaded] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [options, setOptions] = useState<Option[]>([]);
+  const [taken, setTaken] = useState<Record<string, string>>({});
+  const [forked, setForked] = useState(false);
   const [events, setEvents] = useState<WorldEvent[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [serverUi, setServerUi] = useState<UIComponent[] | null>(null);
@@ -132,7 +134,10 @@ export function usePlay(worldId: string) {
         const [ts, op] = await Promise.allSettled([api.turns(worldId, 200), api.options(worldId)]);
         if (!live) return;
         if (ts.status === "fulfilled") setTurns(ts.value);
-        if (op.status === "fulfilled") setOptions(op.value.options ?? []);
+        if (op.status === "fulfilled") {
+          setOptions(op.value.options ?? []);
+          setTaken(op.value.taken ?? {});
+        }
         else if (ts.status === "fulfilled" && ts.value.length)
           setOptions(ts.value[ts.value.length - 1].options ?? []);
         else if (w.opening_options?.length) setOptions(w.opening_options); // v1.2 turn-0 options
@@ -387,6 +392,9 @@ export function usePlay(worldId: string) {
                   // the 世界面板 / header reflect the new state right away (narration may still be typing)
                   if (state) setWorld((w) => (w ? { ...w, state } : w));
                   setOptions(newOptions ?? turn.options ?? []);
+                  setTaken({});
+                  const br = d.branch as { forked?: boolean } | undefined;
+                  setForked(Boolean(br?.forked));
                 }
                 break;
               }
@@ -438,6 +446,7 @@ export function usePlay(worldId: string) {
       if (!a || busy) return false;
       const body: TurnBody = { action: a, option_id, client_turn_id: uid() };
       setPending(body);
+      setForked(false);
       void runStream(streamPath.turn(worldId), body, a, false);
       return true;
     },
@@ -470,11 +479,35 @@ export function usePlay(worldId: string) {
       setWorld(w.value);
     }
     if (ts.status === "fulfilled") setTurns(ts.value);
-    if (op.status === "fulfilled") setOptions(op.value.options ?? []);
-    else if (ts.status === "fulfilled" && ts.value.length)
+    if (op.status === "fulfilled") {
+      setOptions(op.value.options ?? []);
+      setTaken(op.value.taken ?? {});
+    } else if (ts.status === "fulfilled" && ts.value.length) {
       setOptions(ts.value[ts.value.length - 1].options ?? []);
+      setTaken({});
+    }
     await refreshSide();
   }, [worldId, refreshSide]);
+
+  const applyCheckout = useCallback(
+    async (out: {
+      world?: World;
+      turns?: Turn[];
+      options?: Option[];
+      taken?: Record<string, string>;
+    }) => {
+      if (out.world) {
+        worldCache.set(out.world);
+        setWorld(out.world);
+      }
+      if (out.turns) setTurns(out.turns);
+      if (out.options) setOptions(out.options);
+      setTaken(out.taken ?? {});
+      if (!out.world || !out.turns || !out.options) await reloadStory();
+      else await refreshSide();
+    },
+    [reloadStory, refreshSide],
+  );
 
   const dismissSafety = () => setSafety(null);
   const dismissError = () => {
@@ -532,5 +565,9 @@ export function usePlay(worldId: string) {
     dismissError,
     refreshSide,
     reloadStory,
+    applyCheckout,
+    taken,
+    forked,
+    dismissForked: () => setForked(false),
   };
 }

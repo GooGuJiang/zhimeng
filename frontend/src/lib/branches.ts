@@ -32,6 +32,8 @@ export interface BranchLine {
   id: string;
   leaf_id: string;
   current: boolean;
+  label?: string;
+  title?: string;
 }
 
 export interface BranchTree {
@@ -41,8 +43,12 @@ export interface BranchTree {
 }
 
 export interface BranchRewind {
-  current_node_id: string;
+  current_node_id?: string;
+  head_turn_id?: string | null;
+  branch_id?: string;
   options: Option[];
+  taken?: Record<string, string>;
+  turns?: import("./types").Turn[];
   world?: unknown;
 }
 
@@ -136,7 +142,7 @@ export function parseBranchTree(raw: unknown): BranchTree | null {
     }));
   if (!nodes.length) return null;
   const lines = Array.isArray(r.lines)
-    ? r.lines.filter((l) => l && l.id && l.leaf_id).map((l) => ({ id: l.id, leaf_id: l.leaf_id, current: Boolean(l.current) }))
+    ? r.lines.filter((l) => l && l.id && l.leaf_id).map((l) => ({ id: l.id, leaf_id: l.leaf_id, current: Boolean(l.current), label: l.label, title: l.title }))
     : [{ id: "line_main", leaf_id: r.current_node_id, current: true }];
   return { current_node_id: r.current_node_id, nodes, lines };
 }

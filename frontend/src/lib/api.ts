@@ -243,11 +243,14 @@ export const api = {
     request<World>("/worlds", { method: "POST", json: body, ...slow }),
 
   turns: (id: string, limit = 50) => request<Turn[]>(`/worlds/${id}/turns?limit=${limit}`),
-  options: (id: string) => request<{ options: Option[] }>(`/worlds/${id}/options`),
-  /** 剧情脉络（多线）。后端未就绪时返回 404，前端降级为单线时间线。 */
+  options: (id: string) =>
+    request<{ options: Option[]; taken?: Record<string, string> }>(`/worlds/${id}/options`),
+  /** 剧情脉络（多线）。后端未就绪时返回 404，前端降级为只读单线。 */
   branches: (id: string) => request<BranchTree>(`/worlds/${id}/branches`),
   rewindBranch: (id: string, to_node_id: string) =>
     request<BranchRewind>(`/worlds/${id}/branches/rewind`, { method: "POST", json: { to_node_id } }),
+  checkoutBranch: (id: string, turn_id: string | null) =>
+    request<BranchRewind>(`/worlds/${id}/branches/checkout`, { method: "POST", json: { turn_id } }),
 
   events: (id: string, type = "offscreen", limit = 50) =>
     request<WorldEvent[]>(`/worlds/${id}/events?type=${type}&limit=${limit}`),

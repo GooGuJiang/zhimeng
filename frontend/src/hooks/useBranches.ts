@@ -68,13 +68,13 @@ export function useBranches(worldId: string, turns: Turn[], ready: boolean) {
   const tree = supported && remote ? remote : treeFromTurns(turns);
 
   const rewind = useCallback(
-    async (to_node_id: string): Promise<{ options?: Option[]; world?: World } | null> => {
+    async (to_node_id: string): Promise<{ options?: Option[]; taken?: Record<string, string>; turns?: import("@/lib/types").Turn[]; world?: World } | null> => {
       setRewinding(true);
       setError(null);
       try {
         const out = await api.rewindBranch(worldId, to_node_id);
         await refresh(true);
-        return { options: out.options, world: out.world as World | undefined };
+        return { options: out.options, taken: out.taken, turns: out.turns, world: out.world as World | undefined };
       } catch (e) {
         setError(errorText(e));
         return null;

@@ -61,6 +61,8 @@ export function BranchDialog({
   const [working, setWorking] = useState(false);
   const walked = walkTree(tree.nodes);
   const nLines = lineCount(tree);
+  const labels = new Map<string, string>();
+  for (const l of tree.lines) if (l.label) labels.set(l.id, l.label);
 
   const confirm = async () => {
     if (!pending || working) return;
@@ -110,6 +112,12 @@ export function BranchDialog({
               <div className="branch-body">
                 <div className="branch-title">
                   {node.index === 0 ? "开局" : node.action || "一次选择"}
+                  {(() => {
+                    const lab = labels.get(node.line_id);
+                    const parent = tree.nodes.find((n) => n.id === node.parent_id);
+                    const forkStart = Boolean(lab && node.line_id !== "main" && parent && parent.line_id !== node.line_id);
+                    return forkStart ? <span className="tag">{lab}</span> : null;
+                  })()}
                   {here ? <span className="tag gold">你在这里</span> : null}
                 </div>
                 {node.summary ? <div className="branch-summary">{node.summary}</div> : null}

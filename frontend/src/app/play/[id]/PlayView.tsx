@@ -496,12 +496,22 @@ export function PlayView({ id }: { id: string }) {
                   <Send size={16} aria-hidden /> 行动
                 </button>
               </form>
+              {p.forked ? (
+                <div className="notice info" role="status" data-testid="branch-forked">
+                  故事从这里走出了另一条路，原先走过的仍然留在脉络里。
+                  <button type="button" className="linkish" onClick={p.dismissForked} style={{ marginLeft: 8 }}>
+                    知道了
+                  </button>
+                </div>
+              ) : null}
               <BranchChoices
                 options={p.options}
                 disabled={p.busy}
-                takenIds={branches.tree.nodes
-                  .filter((n) => n.parent_id === branches.tree.current_node_id && n.choice_id)
-                  .map((n) => n.choice_id as string)}
+                takenIds={Object.keys(p.taken).length
+                  ? Object.keys(p.taken)
+                  : branches.tree.nodes
+                      .filter((n) => n.parent_id === branches.tree.current_node_id && n.choice_id)
+                      .map((n) => n.choice_id as string)}
                 onPick={(o) => p.send(o.text, o.id)}
               />
             </div>
@@ -553,7 +563,7 @@ export function PlayView({ id }: { id: string }) {
           onRewind={async (node) => {
             const out = await branches.rewind(node.id);
             if (!out) return false;
-            await p.reloadStory();
+            await p.applyCheckout(out);
             return true;
           }}
         />
