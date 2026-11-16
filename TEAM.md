@@ -586,15 +586,16 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 
 ### 前端进度（2026-11-16）
 - 评估：现有 OpenUI `choice_list` / `Choices` 不展示后果提示，且与游玩页选项按钮重复，继续排除；在作曲区做了独立的「角色分支选择」（`BranchChoices`），保留自由输入，testid 仍为 `option-btn`。
-- 选项：2–4 个可点选项，每项都有简短后果提示（后端没给 `hint` 时用本地规则补一条中文提示）。后端没给选项时只保留自由输入。
-- 剧情脉络：游玩页顶部时间条 +「剧情脉络」对话框，可看出多线；支持回到某一步另选。接口未就绪时降级为只读单线（用 `GET /turns`），并说明分叉还要等故事引擎。
-- 契约写在 `FRONTEND_REQUESTS.md` §5：`GET /worlds/{id}/branches`、`POST /worlds/{id}/branches/rewind`（后端另有 `checkout` 别名，并已兼容草案字段）。未改、未提交后端代码。后端已提交契约与实现（2eb0103、d7e7eee），字段与前端草案兼容；兜底模式即可完整录到「两条线」。
+- 选项：2–4 个可点选项，每项都有简短后果提示（后端 `hint` 优先；缺了才用本地规则补）。`GET /options` 与回溯响应里的 `taken` 会在已走过的选项上标「已走过」。新开支线时提示「故事从这里走出了另一条路」（`done.branch.forked`，界面不出现技术字段）。
+- 剧情脉络：游玩页顶部时间条 +「剧情脉络」对话框，可看出多线，分叉点标「支线1」等；可回到某一步另选（`POST /branches/rewind`，并用返回的 world/turns/options/taken 更新页面）。接口 404 时降级为只读单线。
+- 已与后端 v1.5（2eb0103、d7e7eee）对齐：草案字段全部对得上；也对接了 `checkout`、`taken`、`done.branch`。未改后端代码。字段无不符。
 - 浅色主题、无 AI 标识、界面无技术术语；加载/失败/重试齐；`prefers-reduced-motion` 下调掉位移动画。
-- 测试：`tests/branches.spec.ts`（mock 引擎可真正分叉）。演示（mock 或接口就绪后的兜底后端）步骤：
-  1. 打开一个已确认的世界，进入游玩页（兜底模式即可）。
-  2. 开局可见 2–4 个带提示的选项，下方仍可自由输入。
-  3. 点「调查仓库铁门」（或当前世界里类似的调查项），旁白走向铁门/仓库。
-  4. 打开「剧情脉络」，看到开局 → 这一步，「你在这里」。
-  5. 点「回到这里，另选一条」→ 确认「回到这里」→ 回到开局选项。
-  6. 改点另一项（如「向顾长庚追问细节」），再打开脉络，应同时看到两条线。
-  （第 5–6 步：用兜底后端即可完整录制；也可用前端 mock 套件 `branches.spec.ts` 复现。）
+- 测试（隔离端口 :3422 / :8420，`ZM_FORCE_FALLBACK=1 ZM_DISABLE_IMAGE=1`，未调用真实生图/配音/模型）：
+  - `tsc` / `lint` / `next build` 通过
+  - `pnpm test:mock`：85 passed，5 skipped（real-shots 3 + branches-real 2）
+  - mock `tests/branches.spec.ts`：5/5
+  - 真实兜底 `tests/branches-real.spec.ts`：2/2（含首页生成确认，以及完整两条线演示）
+- 截图（真实兜底数据，生产构建）：`docs/screens/branch-choices-opening.png`、`branch-after-first-choice.png`、`branch-tree-one-line.png`、`branch-rewound-to-opening.png`（回到酒馆那一步，可见「已走过」）、`branch-tree-two-lines.png`、`branch-opening-tree.png`；`branch-readonly-fallback.png` 仍是 mock 降级形态。
+- 演示请用后端进度里的步骤（提示词「织梦演示：迷雾小镇的古钟」）。也可用：
+  `ZM_REAL_BRANCHES=1 ZM_WEB=… ZM_API=… pnpm exec playwright test -c tests branches-real.spec.ts`
+
