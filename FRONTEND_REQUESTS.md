@@ -129,8 +129,8 @@ Mock specs, QA `auth.spec.ts` and the full e2e all pass. Remaining asks, most im
 前端不会在界面上展示 `id` / `line_id` / `option_id` 等技术字段。未实现时请对这两个路径返回 404，
 前端即可降级，不必先占位 501。
 
-### 与后端现行实现的对齐（同一工作区，后端尚未提交）
-后端已经在本工作区实现了上述路径，并做了字段兼容（`current_node_id` / `lines` / `parent_id` /
+### 与后端现行实现的对齐（2eb0103 / d7e7eee）
+后端已实现上述路径，并做了字段兼容（`current_node_id` / `lines` / `parent_id` /
 `summary` / `line_id` / `current` / `choice_id`），另外还有：
 - `POST /branches/checkout { turn_id }`（`rewind { to_node_id }` 是别名，`"opening"` 表示开局）
 - `GET /branches/path?turn_id=`（只预览、不切换）
@@ -138,8 +138,7 @@ Mock specs, QA `auth.spec.ts` and the full e2e all pass. Remaining asks, most im
 - `Turn.parent_turn_id` / `branch_id`，`World.head_turn_id`；`GET /turns` 只返回当前路径（active=1）
 - `Option.hint` 与兜底 `fill_hints`；`TurnRequest.from_turn_id`、可只传 `option_id`
 
-前端已按草案字段读取，能对接这套实现。请后端把契约写入 API.md，并随自己的提交一起提交。
-前端**没有改、也不会提交**后端文件。
+前端已按草案字段读取，能对接这套实现。契约已见 API.md F11。前端没有改后端文件。
 
 ### 其它
 配音长轮询仍走 `/api/assets/{id}?wait=`，本改动不涉及。录屏演示步骤见 TEAM.md 本节进度。
