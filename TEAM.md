@@ -527,3 +527,27 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 - 新增用例 `test_ip_login_thresholds_configurable`：调小 `ZM_LOGIN_IP_ACCOUNT_*` / `ZM_LOGIN_IP_*` 后按新阈值锁定，换 IP 不受影响（6f4cc35 生效）。
 - 13 个限流变量 compose 全部透传（`docker compose config` 覆盖值逐一出现），容器内 `get_settings()` 读到的默认值与代码一致；README 环境变量表、Docker 演示 `.env` 示例、`.env.example` 已同步，「按 IP 登录限制不可调」的说法已删除。
 - Docker 两容器 healthy；最后已 `down`。
+
+## 2026-11-16 评审意见改版：角色分支选择交互（Grok Bot 派发）
+评语：「织梦互动小说多线叙事创意好；建议增加角色分支选择交互演示。」
+- 基线：GitHub GooGuJiang/zhimeng master 最新（1e41ef6），/workspace/zhimeng 已 pull 到最新。
+- 目标：游玩页每回合给出清晰可点的「角色分支选择」（2–4 个由角色/导演 Agent 生成的选项，带简短后果提示；也保留自由输入），选择后剧情明确走向不同分支；最好有一个能看出“多线”的分支视图（如分支树/时间线，可回到某一分支点另选）。现有 choice_list 组件目前被 exclude，先评估复用。
+- 分工：织梦-后端负责选项生成/分支存储/回溯接口；织梦-前端负责交互与分支视图（浅色主题、不显示 AI 生成标识、不出现技术术语）。
+- 测试里不调用真实生图；完成后跑全套测试，提交并推送到 GitHub master（同步 feat/auth），在本节下写进度，并告知 Grok Bot。
+- 录屏组随后会录这段演示，请确保有一个稳定可复现的演示世界/流程（可用 fallback 模式）。
+
+### 后端接口契约（织梦-后端，2026-11-16，API.md v1.5 / F11 为准）
+前端可以先按这里开工，字段细节见 API.md「F11 角色分支选择与分支树」。
+- **选项**：每回合 2–4 个 `Option {id, text, hint, character_id?}`，`hint` 是简短后果提示（≤16 字），开局选项也有。兜底模式（`ZM_FORCE_FALLBACK=1`）下同样的世界设定 + 同样的点选顺序 → 选项、叙事、状态完全相同，适合录屏。
+- **点选项推进**：`POST /api/worlds/{id}/turns` `{option_id}`（`action` 可省略）；仍支持自由输入 `{action}`。`done.branch = {branch_id, label, forked, head_turn_id}`。
+- **剧情树**：`GET /api/worlds/{id}/branches` → `{head_turn_id, branch_id, opening, branches[], nodes[]}`。`nodes[].children` 多于 1 个就是分叉点；`nodes[].choices[].taken_turn_id` 表示这个选项已经走过。`branches[].label` 是「主线 / 支线1 / 支线2…」，`title` 是这条线的起点选择。
+- **回到分支点另选**：
+  - 方式 A：`POST /api/worlds/{id}/branches/checkout {turn_id}`（`null`/`"opening"` = 开局）→ `{world, turns, options, taken, head_turn_id, branch_id}`，然后正常点选项。
+  - 方式 B（一步到位）：`POST /turns {option_id, from_turn_id}`。
+  - 在已有后续剧情的节点上再走一步，会自动新开一条支线，原来的剧情保留。
+- **只预览不切换**：`GET /api/worlds/{id}/branches/path?turn_id=` → `{turns}`。
+- **当前视角**：`/turns`、`/options`（新增 `taken`）、`/events`、`/memory`、`/god/*`、`/ui`、`/export` 只反映当前路径，其它支线的剧情和记忆不会混进来。
+- **重写**：`/turns/retry` 在当前节点之后已有剧情时返回 `error {retryable:false}`，提示「这一步之后已经有后续剧情了，可以从这里另选一个方向」。
+- **隔离**：别人的世界或节点一律返回 404 `not_found`。
+- **文案**：返回给玩家的文字（label、title、hint、错误提示）都是普通中文，不含技术用语。
+- **choice_list**：UI 组件里的 `choice_list` 现在也带 `hint` 和 `character_id`。前端已有专门的选项按钮区，继续 exclude 也可以，由前端决定。

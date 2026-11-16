@@ -1,4 +1,4 @@
-# 织梦 Backend API Contract (v1, v1.4-draft2: user accounts)
+# 织梦 Backend API Contract (v1, v1.4: user accounts, v1.5: 角色分支选择)
 
 Base URL: `http://localhost:8000` · all routes prefixed with `/api` · CORS allows `http://localhost:3000` (and 127.0.0.1:3000).
 JSON everywhere (UTF-8). Errors: HTTP 4xx/5xx with `{"detail": "...", "code": "..."}` (v1.4-draft: optional `field`, `retry_after`).
@@ -52,9 +52,11 @@ type World = { id: string; title: string; genre: string; tone: string; era: stri
                opening_options: Option[];             // v1.2 documented: turn-0 options (same as GET /options at turn 0)
                detail_status: "enriching" | "complete" | "local";   // v1.2 two-step generation, see F1
                gen_request: GenerateWorldRequest | null;            // v1.2: original generation request (incl. last `refine`)
+               head_turn_id: string | null; branch_id: string;      // v1.5: 当前所在的剧情节点（null = 开局）与剧情线
                ai_generated: true; ai_label: string }
 type WorldSummary = { id; title; genre; tone; mode; turn: number; status; created_at; updated_at }
-type Option = { id: string; text: string; hint?: string }
+type Option = { id: string; text: string; hint?: string;          // v1.5: hint = 简短后果提示（≤16 字），每个选项都有
+                character_id?: string | null }                    // v1.5: 该选项主要牵涉的角色（可为空）
 type WorldEvent = { id: string; world_id: string; type: "offscreen"|"world"|"player"|"injected"|"npc_action";
                     summary: string; actor_ids: string[]; location_id: string|null; turn: number; chapter: number;
                     impact: string; timestamp: string /* ISO */; in_world_time: string; seen: boolean }
@@ -62,7 +64,10 @@ type Citation = { fact_id: string; content: string; turn: number; chapter: numbe
 type Turn = { id: string; world_id: string; index: number; chapter: number; action: string; narration: string;
               options: Option[]; events: WorldEvent[]; facts: string[]; asset_ids: string[]; key_scene: boolean;
               source: "llm" | "fallback";   // v1.2: "fallback" = whole model chain failed, local template narration
-              created_at: string; ai_generated: true; ai_label: string }
+              created_at: string; ai_generated: true; ai_label: string;
+              parent_turn_id: string | null;   // v1.5: 上一回合（null = 从开局出发）
+              branch_id: string;               // v1.5: 所在剧情线，"main" = 主线
+              option_id: string | null }       // v1.5: 本回合点选的选项 id（自由输入为 null）
 type Asset = { id: string; world_id: string; type: "image"|"audio"; url: string /* /api/static/assets/<file> */; turn_id: string|null;
                prompt: string; source: "dashscope"|"fallback"; created_at: string;
                status: "pending"|"ready";   // v1.3: pending = placeholder, real file still generating (same id upgrades in place)
@@ -210,6 +215,74 @@ Input blocked → turn/generate stream emits `safety` (blocked=true) then `done 
 v1.2 (BUG-007): responds within ~8 s at most. The LLM version runs in a background job (fast model, short input) and is cached per world + turn.
 If it is not ready in time, the response is the local summary with `status:"pending"`; GET again a few seconds later for the LLM version
 (`status:"complete"`). All fields of the old shape are always present.
+
+### F11 角色分支选择与分支树（v1.5，2026-11-16 评审意见改版）
+**选项**：每回合结束时给出 2–4 个「角色分支选择」（`Option`），每个都带 `hint`（简短后果提示，≤16 字，如「老乔会更信任你」「可能找到关键线索」）
+和可选的 `character_id`（该选项牵涉的角色）。选项由导演/角色 Agent 生成；`ZM_FORCE_FALLBACK=1` 时由本地规则生成，**同一世界设定 +
+同样的选择顺序 → 每次结果完全相同**（不依赖随机 id，可用于录屏）。开局选项（`World.opening_options`）同样带 `hint`。
+自由输入照旧可用（`option_id` 为空）。点选项后叙事会明确朝 `hint` 的方向发展（好感、物品、地点等状态随之不同）。
+
+**剧情树**：回合构成一棵树。每个 `Turn` 有 `parent_turn_id`（null = 从开局出发）和 `branch_id`（`"main"` = 主线）。
+`World.head_turn_id` 是当前所在节点（null = 开局），`World.branch_id` 是当前剧情线。从一个**已有后续剧情**的节点再走一步，
+会自动开一条新支线（不会覆盖原来的剧情）；在线尾继续走则沿当前线延伸。
+**当前视角**：`GET /turns`、`/options`、`/events`、`/memory`、`/god/*`、`/ui`、`/export`、`/poster` 都只反映**当前所在的这条路径**
+（开局 → … → head）；其它支线的回合、事件、记忆、角色状态都不会带入当前路径。回到某节点后，世界状态（时间、地点、属性、物品、
+角色好感/情绪/位置）恢复到该节点刚结束时的样子。
+
+```ts
+type BranchChoice = Option & { taken_turn_id: string | null }   // 这个选项已经走过 → 指向那一回合（可直接回看/切过去）
+type BranchNode = {
+  id: string;                      // = Turn.id
+  parent_turn_id: string | null;   // null = 开局
+  branch_id: string; index: number; chapter: number;
+  action: string;                  // 玩家这一步做了什么（点选项时 = 选项文本）
+  option_id: string | null; hint: string | null;   // 点的是哪个选项、它的后果提示
+  preview: string;                 // 本回合叙事开头（≤60 字），用于树上的节点卡片
+  created_at: string;
+  on_path: boolean;                // 是否在当前路径上（开局 → head）
+  is_head: boolean;                // 是否当前所在节点
+  children: string[];              // 子节点 id（>1 个 = 分叉点）
+  choices: BranchChoice[];         // 这一回合结束时给出的选项
+}
+type Branch = {
+  id: string;                      // "main" | "b_xxxxxxxx"
+  label: string;                   // "主线" | "支线1" | "支线2" …（按创建顺序）
+  title: string;                   // 这条线的起点选择，如「去钟楼看看古钟」（主线 = 世界标题）
+  parent_branch_id: string | null; fork_turn_id: string | null /* 从哪个节点分出，null = 开局 */; fork_index: number;
+  turn_count: number; tip_turn_id: string | null /* 线尾 */; is_current: boolean; created_at: string;
+}
+type BranchTree = {
+  world_id: string; head_turn_id: string | null; branch_id: string;
+  opening: { preview: string; is_head: boolean; children: string[]; choices: BranchChoice[] };  // 开局节点（树根）
+  branches: Branch[];              // 按创建顺序，主线在前
+  nodes: BranchNode[];             // 全部回合，按 (index, created_at) 升序
+}
+```
+
+`GET /api/worlds/{id}/branches` → `BranchTree`（整棵树，含所有支线）。
+
+`GET /api/worlds/{id}/branches/path?turn_id=<id>` → `{ "head_turn_id": str|null, "turns": Turn[] }` —— 开局到该节点的完整路径（升序），
+**只预览、不切换**；不传 `turn_id` = 当前路径；`turn_id=opening` → 空列表。
+
+`POST /api/worlds/{id}/branches/checkout` body `{ "turn_id": str | null }`（null 或 `"opening"` = 回到开局）→
+`{ "world": World, "turns": Turn[] /* 新的当前路径 */, "options": Option[] /* 该节点的选项 */, "taken": {option_id: turn_id},
+   "head_turn_id": str|null, "branch_id": str }`。回到某个节点（包括切到另一条支线的线尾），不生成新内容、不调用模型。
+
+`POST /api/worlds/{id}/turns`（SSE，原接口扩展）body 新增：
+- `option_id` 单独给出时 `action` 可以省略（用该选项的文本）；`action` 和 `option_id` 都为空 → 422。
+- `from_turn_id?: string`：从指定节点出发走这一步（`"opening"` = 从开局）。等价于先 checkout 再走一步，一次请求完成「回到分支点另选」。
+  不传 = 从当前节点出发。
+- `done` 新增 `branch: { "branch_id", "label", "forked": bool /* 本回合新开了支线 */, "head_turn_id" }`；`done.turn` 带 `parent_turn_id/branch_id/option_id`。
+
+`GET /api/worlds/{id}/options` → `{ "options": Option[], "taken": {option_id: turn_id} }`（v1.5 新增 `taken`：当前节点哪些选项已经走过）。
+
+`POST /api/worlds/{id}/turns/retry`：重写当前节点那一回合。若当前节点之后已有剧情（例如回到了中间节点），返回 SSE `error`
+`{"message": "这一步之后已经有后续剧情了，可以从这里另选一个方向", "retryable": false}`。
+
+错误：世界不存在 / 不是自己的 → 404 `not_found`；节点不属于该世界 → 404 `{"detail": "没有找到这段剧情", "code": "not_found"}`。
+所有返回给玩家看的文字（`label`、`title`、`hint`、错误提示）都是普通中文，不含技术用语。
+
+旧数据：启动时自动迁移，旧回合全部视为主线（按回合序号串成一条线，`branch_id:"main"`），当前节点 = 最后一回合，行为与以前完全一致。
 
 ## 用户系统接口契约（feat/auth，草案 v1.4-draft2）
 
@@ -571,3 +644,11 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 - 契约见上文「用户系统接口契约」§13「实现时的修订」：用户名改为字母开头；密码 8–64 位；新增 `ZM_TRUSTED_PROXIES`；偏好 rating 只作默认值；带 cookie 的写请求校验 Origin；支持预设头像。
 - 新增依赖 `argon2-cffi`、`PyJWT`、`python-multipart`、`Pillow`（requirements.txt 和 pyproject.toml 已同步）。
 - `/education/summary` 的 `complete` 结果持久化到 `state.flags.edu_summary`；`POST /worlds/{id}/events/seen` 只会标记本世界的事件。
+
+### v1.5（2026-11-16，后端核心）：角色分支选择 + 剧情树（全部为新增，旧调用方不受影响）
+- `Option` 新增 `character_id`，`hint` 每个选项都有（含开局选项）；每回合 2–4 个选项；兜底模式下选项与叙事可稳定复现。
+- `Turn` 新增 `parent_turn_id` / `branch_id` / `option_id`；`World` 新增 `head_turn_id` / `branch_id`。
+- 新增 `GET /api/worlds/{id}/branches`、`GET /api/worlds/{id}/branches/path`、`POST /api/worlds/{id}/branches/checkout`。
+- `POST /turns` 新增 `from_turn_id`，`option_id` 单独给出时可省略 `action`；`done` 新增 `branch`；`GET /options` 新增 `taken`。
+- 列表类接口（turns/events/memory/god/ui/export/poster）只反映当前路径；`/turns/retry` 在当前节点之后已有剧情时返回不可重试的 `error`。
+- 启动迁移：`turns` 新增 `parent_turn_id/branch_id/option_id/active/state_after`，`events/trajectories/summaries/memories` 新增 `branch_id/active`，新表 `branches`；旧回合视为主线。
