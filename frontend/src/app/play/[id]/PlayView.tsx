@@ -33,6 +33,9 @@ import { SafetyNotice } from "@/components/SafetyNotice";
 import { AudioBar, Illustration } from "@/components/MediaBits";
 import { mergeAssets } from "@/lib/assets";
 import { useToast } from "@/components/Toast";
+import { BranchChoices } from "@/components/BranchChoices";
+import { BranchDialog, BranchStrip } from "@/components/BranchView";
+import { useBranches } from "@/hooks/useBranches";
 
 type ReportTarget = { turnId?: string; content: string };
 
@@ -47,11 +50,13 @@ export function PlayView({ id }: { id: string }) {
   const [report, setReport] = useState<ReportTarget | null>(null);
   const [posterOpen, setPosterOpen] = useState(false);
   const [eduOpen, setEduOpen] = useState(false);
+  const [branchOpen, setBranchOpen] = useState(false);
   // phones: the story and the 世界面板 share one column — a sticky segmented switch flips between them
   const [mobileTab, setMobileTab] = useState<"story" | "world">("story");
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  const branches = useBranches(id, p.turns, p.loaded);
   useEffect(() => setCurrentWorld(id), [id]);
   // keep the newest text in view while it streams
   const liveLen = p.live?.text.length ?? 0;
@@ -295,7 +300,7 @@ export function PlayView({ id }: { id: string }) {
             <header className="story-head">
               <h1 className="h1">{world.title}</h1>
               <span className="tag gold">
-                第{world.state.chapter}章 · 第{world.state.turn}回合
+                第{world.state?.chapter ?? 1}章 · 第{world.state?.turn ?? 0}回合
               </span>
               {world.state.time ? <span className="tag">{world.state.time}</span> : null}
               {world.mode === "education" ? <span className="tag jade">教育模式</span> : null}
@@ -354,6 +359,8 @@ export function PlayView({ id }: { id: string }) {
                 </button>
               </div>
             </header>
+
+            <BranchStrip tree={branches.tree} onOpen={() => setBranchOpen(true)} />
 
             {world.status === "draft" ? (
               <div className="notice info row">
@@ -466,7 +473,7 @@ export function PlayView({ id }: { id: string }) {
                   ref={inputRef}
                   className="textarea"
                   data-testid="free-input"
-                  placeholder="你想做什么？输入你的行动…"
+                  placeholder="或者，写下你自己的行动…"
                   value={input}
                   maxLength={300}
                   rows={1}
@@ -489,27 +496,14 @@ export function PlayView({ id }: { id: string }) {
                   <Send size={16} aria-hidden /> 行动
                 </button>
               </form>
-              {p.options.length ? (
-                <div className="options" aria-label="可选行动">
-                  {p.options.map((o, i) => (
-                    <button
-                      key={o.id}
-                      type="button"
-                      className="option"
-                      data-testid="option-btn"
-                      disabled={p.busy}
-                      onClick={() => p.send(o.text, o.id)}
-                      style={{ animationDelay: `${i * 60}ms` }}
-                    >
-                      <span className="num">{String(i + 1).padStart(2, "0")}</span>
-                      <span>
-                        {o.text}
-                        {o.hint ? <small>{o.hint}</small> : null}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
+              <BranchChoices
+                options={p.options}
+                disabled={p.busy}
+                takenIds={branches.tree.nodes
+                  .filter((n) => n.parent_id === branches.tree.current_node_id && n.choice_id)
+                  .map((n) => n.choice_id as string)}
+                onPick={(o) => p.send(o.text, o.id)}
+              />
             </div>
           </section>
         </div>
@@ -525,7 +519,8 @@ export function PlayView({ id }: { id: string }) {
             streaming={p.busy}
             source={p.uiSource}
             // v1.2: event_feed / choice_list are area:"bottom" — mirrored by the 场外大事件 panel and the
-            // option buttons, so the side panel skips that area (type list kept for older servers).
+            // 角色分支选择 (BranchChoices). OpenUI Choices was evaluated for reuse: it does not show
+            // consequence hints and would duplicate the composer options, so it stays excluded.
             skipAreas={["bottom"]}
             exclude={["event_feed", "choice_list"]}
           />
@@ -545,6 +540,24 @@ export function PlayView({ id }: { id: string }) {
         <PosterDialog world={world} assets={p.assets} onClose={() => setPosterOpen(false)} />
       ) : null}
       {eduOpen ? <EduSummaryDialog worldId={id} onClose={() => setEduOpen(false)} /> : null}
+      {branchOpen ? (
+        <BranchDialog
+          tree={branches.tree}
+          supported={branches.supported}
+          loading={branches.loading}
+          error={branches.error}
+          rewinding={branches.rewinding}
+          busy={p.busy}
+          onClose={() => setBranchOpen(false)}
+          onRetry={() => void branches.refresh(true)}
+          onRewind={async (node) => {
+            const out = await branches.rewind(node.id);
+            if (!out) return false;
+            await p.reloadStory();
+            return true;
+          }}
+        />
+      ) : null}
     </div>
   );
 }

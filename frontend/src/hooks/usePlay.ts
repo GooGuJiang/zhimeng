@@ -106,7 +106,7 @@ export function usePlay(worldId: string) {
     // v1.3: committed narration may be replaced by post-commit review — the server copy wins for every
     // turn we already show (new turns are committed by the typewriter, so they're not added here).
     if (ts.status === "fulfilled") syncTurns(ts.value);
-    if (w.status === "fulfilled") {
+    if (w.status === "fulfilled" && w.value && typeof w.value === "object" && "id" in w.value && "title" in w.value) {
       worldCache.set(w.value);
       setWorld(w.value);
       if (w.value.mode === "education")
@@ -459,6 +459,23 @@ export function usePlay(worldId: string) {
     void runStream(streamPath.retry(worldId), {}, last.action, true);
   }, [busy, turns, runStream, worldId]);
 
+  const reloadStory = useCallback(async () => {
+    const [w, ts, op] = await Promise.allSettled([
+      api.getWorld(worldId),
+      api.turns(worldId, 200),
+      api.options(worldId),
+    ]);
+    if (w.status === "fulfilled" && w.value && typeof w.value === "object" && "id" in w.value && "title" in w.value) {
+      worldCache.set(w.value);
+      setWorld(w.value);
+    }
+    if (ts.status === "fulfilled") setTurns(ts.value);
+    if (op.status === "fulfilled") setOptions(op.value.options ?? []);
+    else if (ts.status === "fulfilled" && ts.value.length)
+      setOptions(ts.value[ts.value.length - 1].options ?? []);
+    await refreshSide();
+  }, [worldId, refreshSide]);
+
   const dismissSafety = () => setSafety(null);
   const dismissError = () => {
     setError(null);
@@ -514,5 +531,6 @@ export function usePlay(worldId: string) {
     dismissSafety,
     dismissError,
     refreshSide,
+    reloadStory,
   };
 }

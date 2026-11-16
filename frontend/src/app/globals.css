@@ -883,3 +883,68 @@ html, body { overflow-x: clip; }
   .work-item, .learn-item { flex-wrap: wrap; }
   .work-actions { width: 100%; justify-content: flex-end; }
 }
+
+
+/* ---- 角色分支选择 / 剧情脉络 (2026-11-16) ---- */
+.branch-choices-h {
+  font-family: var(--serif);
+  font-size: 15px;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+.branch-choices { gap: 8px; }
+.option .option-text { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.option:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.branch-strip {
+  display: flex; align-items: center; gap: 12px; justify-content: space-between;
+  margin: 8px 0 6px; flex-wrap: wrap;
+}
+.branch-strip-line {
+  display: flex; align-items: center; gap: 0; list-style: none; margin: 0; padding: 0;
+  overflow-x: auto; max-width: 100%; flex: 1; min-width: 0;
+}
+.branch-strip-line li {
+  display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 12px;
+  white-space: nowrap;
+}
+.branch-strip-line li:not(:last-child)::after {
+  content: ""; width: 16px; height: 0; border-top: 1px dashed var(--line-2); margin: 0 6px;
+}
+.branch-pip {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); flex: none;
+}
+.branch-strip-line li.on { color: var(--gold-2); }
+.branch-strip-line li.on .branch-pip { background: var(--gold); box-shadow: 0 0 0 3px rgba(var(--gold-rgb), 0.2); }
+.branch-lead, .branch-note { font-size: 13px; color: var(--muted, var(--faint)); margin: 0 0 12px; line-height: 1.7; }
+.branch-note { padding: 8px 12px; background: rgba(var(--gold-rgb), 0.06); border-radius: var(--r-md); }
+.branch-tree { list-style: none; margin: 0; padding: 0; position: relative; }
+.branch-node {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 8px 8px 8px 8px; position: relative;
+}
+.branch-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--gold-dim);
+  margin-top: 5px; flex: none; position: relative; z-index: 1;
+}
+.branch-node.current .branch-dot {
+  background: var(--gold); border-color: var(--gold);
+  box-shadow: 0 0 0 4px rgba(var(--gold-rgb), 0.18);
+}
+.branch-body { min-width: 0; flex: 1; }
+.branch-title { display: flex; align-items: center; gap: 8px; font-family: var(--serif); font-size: 15px; color: var(--ink); flex-wrap: wrap; }
+.branch-summary { font-size: 12px; color: var(--faint); margin-top: 2px; line-height: 1.6; }
+.branch-confirm {
+  margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--bg-2, var(--surface));
+}
+.branch-confirm p { margin: 0 0 10px; font-size: 14px; line-height: 1.7; }
+@media (max-width: 860px) {
+  .branch-strip { margin-top: 4px; }
+  .branch-pip-label { max-width: 6em; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .option { animation: none; transition: none; }
+  .option:hover:not(:disabled) { transform: none; }
+  .branch-strip-line li.on .branch-pip, .branch-node.current .branch-dot { box-shadow: none; }
+}

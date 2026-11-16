@@ -21,6 +21,7 @@ import type {
   WorldSummary,
   KnowledgeCard,
 } from "./types";
+import type { BranchRewind, BranchTree } from "./branches";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "").replace(/\/$/, "");
 
@@ -243,6 +244,10 @@ export const api = {
 
   turns: (id: string, limit = 50) => request<Turn[]>(`/worlds/${id}/turns?limit=${limit}`),
   options: (id: string) => request<{ options: Option[] }>(`/worlds/${id}/options`),
+  /** 剧情脉络（多线）。后端未就绪时返回 404，前端降级为单线时间线。 */
+  branches: (id: string) => request<BranchTree>(`/worlds/${id}/branches`),
+  rewindBranch: (id: string, to_node_id: string) =>
+    request<BranchRewind>(`/worlds/${id}/branches/rewind`, { method: "POST", json: { to_node_id } }),
 
   events: (id: string, type = "offscreen", limit = 50) =>
     request<WorldEvent[]>(`/worlds/${id}/events?type=${type}&limit=${limit}`),

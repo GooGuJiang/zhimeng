@@ -45,6 +45,8 @@ function wav(): Buffer {
 export interface MockState {
   world: Json;
   turns: Json[];
+  /** Current choices; defaults to the captured fixture. */
+  options?: { options: Json[] };
   assets: Asset[];
   /** GET /api/assets/{id}?wait= handler; default: return the current copy from `assets`. */
   assetGet?: (id: string, call: number) => Promise<Asset | null> | Asset | null;
@@ -96,7 +98,13 @@ export async function mockApi(page: Page, init: Partial<MockState> = {}): Promis
         body = r.request().postDataJSON() as Json;
       } catch {}
       const out = await st.extra(method, path, body);
-      if (out !== undefined) return json(r, out);
+      if (out !== undefined) {
+        if (out && typeof out === "object" && "$http" in (out as Json)) {
+          const h = out as { $http: true; status: number; body: unknown };
+          return json(r, h.body, h.status);
+        }
+        return json(r, out);
+      }
     }
     if (path === "/health") return json(r, health);
     if (path === w && method === "GET") return json(r, st.world);
@@ -106,7 +114,9 @@ export async function mockApi(page: Page, init: Partial<MockState> = {}): Promis
       const body = r.request().postDataJSON() as Json;
       return r.fulfill({ status: 200, contentType: "text/event-stream", body: st.turnStream(body) });
     }
-    if (path === `${w}/options`) return json(r, options);
+    if (path === `${w}/branches` || path === `${w}/branches/rewind`)
+      return json(r, { detail: "not found", code: "not_found" }, 404);
+    if (path === `${w}/options`) return json(r, st.options ?? options);
     if (path === `${w}/events`) return json(r, events);
     if (path === `${w}/ui`) return json(r, ui);
     if (path === `${w}/assets`) return json(r, st.assets);
