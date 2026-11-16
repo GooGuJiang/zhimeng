@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 AI_LABEL = "内容由AI生成"
 Mode = Literal["story", "education"]
@@ -77,7 +77,8 @@ class PlayerInfo(BaseModel):
 class Option(BaseModel):
     id: str
     text: str
-    hint: str | None = None
+    hint: str | None = None           # v1.5：简短后果提示（≤16 字）
+    character_id: str | None = None   # v1.5：该选项主要牵涉的角色
 
 
 class World(BaseModel):
@@ -109,6 +110,9 @@ class World(BaseModel):
     detail_status: Literal["enriching", "complete", "local"] = "complete"
     # 生成该世界的原始请求（GenerateWorldRequest 字段，不含 wait_details；含最近一次 regenerate 的 refine）
     gen_request: dict[str, Any] | None = None
+    # v1.5 剧情树：当前所在节点（None = 开局；旧存档为 None 且 turn>0 时以最后一回合为准）与剧情线
+    head_turn_id: str | None = None
+    branch_id: str = "main"
     # v1.4：归属用户（只读；以 worlds.owner_id 列为准）与来源
     owner_id: str = ""
     origin: Literal["generated", "imported"] = "generated"
@@ -168,9 +172,16 @@ class SettingsPatch(BaseModel):
 
 
 class TurnRequest(BaseModel):
-    action: str = Field(..., min_length=1, max_length=2000)
+    action: str = Field("", max_length=2000)   # v1.5：给了 option_id 时可省略（用选项文本）
     option_id: str | None = None
     client_turn_id: str | None = None
+    from_turn_id: str | None = Field(None, max_length=64)  # v1.5：从指定节点出发（"opening" = 开局）；不传 = 当前节点
+
+    @model_validator(mode="after")
+    def _need_action_or_option(self) -> "TurnRequest":
+        if not self.action.strip() and not (self.option_id or "").strip():
+            raise ValueError("action 和 option_id 至少要有一个")
+        return self
 
 
 class WorldEvent(BaseModel):
@@ -204,6 +215,9 @@ class Turn(BaseModel):
     created_at: str = ""
     ai_generated: bool = True
     ai_label: str = AI_LABEL
+    parent_turn_id: str | None = None  # v1.5
+    branch_id: str = "main"            # v1.5
+    option_id: str | None = None       # v1.5
 
 
 class Citation(BaseModel):

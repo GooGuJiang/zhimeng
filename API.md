@@ -255,9 +255,13 @@ type BranchTree = {
   world_id: string; head_turn_id: string | null; branch_id: string;
   opening: { preview: string; is_head: boolean; children: string[]; choices: BranchChoice[] };  // 开局节点（树根）
   branches: Branch[];              // 按创建顺序，主线在前
-  nodes: BranchNode[];             // 全部回合，按 (index, created_at) 升序
+  nodes: BranchNode[];             // nodes[0] = 开局节点（id "opening"，index 0）；其后为全部回合，按 (index, created_at) 升序
 }
 ```
+兼容前端草案（`frontend/src/lib/branches.ts`）的字段也一并返回：`BranchTree.current_node_id`（= head_turn_id，开局为 `"opening"`）、
+`BranchTree.lines[] {id, leaf_id, current, label, title}`；`BranchNode.parent_id`（根回合为 `"opening"`）、`turn_id`、`summary`（≤40 字的 preview）、
+`line_id`（= branch_id）、`current`（= is_head）、`choice_id`（= option_id）。`POST /branches/rewind {to_node_id}` 是 checkout 的别名
+（返回同样的结构，另含 `current_node_id`）。
 
 `GET /api/worlds/{id}/branches` → `BranchTree`（整棵树，含所有支线）。
 

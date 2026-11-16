@@ -540,7 +540,7 @@ type LearningRecord = { world_id: string; title: string; subject: string | null;
 前端可以先按这里开工，字段细节见 API.md「F11 角色分支选择与分支树」。
 - **选项**：每回合 2–4 个 `Option {id, text, hint, character_id?}`，`hint` 是简短后果提示（≤16 字），开局选项也有。兜底模式（`ZM_FORCE_FALLBACK=1`）下同样的世界设定 + 同样的点选顺序 → 选项、叙事、状态完全相同，适合录屏。
 - **点选项推进**：`POST /api/worlds/{id}/turns` `{option_id}`（`action` 可省略）；仍支持自由输入 `{action}`。`done.branch = {branch_id, label, forked, head_turn_id}`。
-- **剧情树**：`GET /api/worlds/{id}/branches` → `{head_turn_id, branch_id, opening, branches[], nodes[]}`。`nodes[].children` 多于 1 个就是分叉点；`nodes[].choices[].taken_turn_id` 表示这个选项已经走过。`branches[].label` 是「主线 / 支线1 / 支线2…」，`title` 是这条线的起点选择。
+- **剧情树**：`GET /api/worlds/{id}/branches` → `{head_turn_id, branch_id, opening, branches[], nodes[]}`，`nodes[0]` 是开局节点（id `"opening"`）。前端草案 `lib/branches.ts` 用的字段（`current_node_id`、`lines`、`parent_id`、`summary`、`line_id`、`current`）也一并返回，`POST /branches/rewind {to_node_id}` 是 checkout 的别名，现有代码可以直接接上。`nodes[].children` 多于 1 个就是分叉点；`nodes[].choices[].taken_turn_id` 表示这个选项已经走过。`branches[].label` 是「主线 / 支线1 / 支线2…」，`title` 是这条线的起点选择。
 - **回到分支点另选**：
   - 方式 A：`POST /api/worlds/{id}/branches/checkout {turn_id}`（`null`/`"opening"` = 开局）→ `{world, turns, options, taken, head_turn_id, branch_id}`，然后正常点选项。
   - 方式 B（一步到位）：`POST /turns {option_id, from_turn_id}`。

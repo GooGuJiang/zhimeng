@@ -78,7 +78,7 @@ async def focus_npc_act(world: World, c: Character, action: str, memories: str) 
             return {"id": c.id, "intent": str(d.get("intent") or "")[:80], "action": str(d["action"])[:120],
                     "line": str(d.get("line") or "")[:120], "mood": str(d.get("mood") or c.mood)[:12],
                     "affinity_delta": aff, "location_id": world.state.player_location_id, "source": "llm"}
-    rng = fallback.seed_rng(world.id, world.state.turn, c.id, action)
+    rng = fallback.seed_rng(fallback.story_key(world), world.state.turn, c.id, action)
     goal = c.goals[0] if c.goals else "自己的打算"
     return {"id": c.id, "intent": f"为了{goal}，试探你的来意", "action": rng.choice(fallback.NPC_ACTIONS),
             "line": rng.choice(fallback.NPC_LINES), "mood": rng.choice(["警惕", "好奇", "焦虑", "镇定", "犹豫"]),
@@ -110,7 +110,7 @@ async def batch_npcs_act(world: World, chars: list[Character], recent: str) -> l
             return out
     out = []
     for c in chars:
-        rng = fallback.seed_rng(world.id, world.state.turn, c.id, "offscreen")
+        rng = fallback.seed_rng(fallback.story_key(world), world.state.turn, c.id, "offscreen")
         cur = world.loc(c.location_id)
         cands = (cur.connections if cur and cur.connections else [l.id for l in world.locations]) or [None]
         lid = rng.choice(cands + ([c.location_id] if c.location_id else []))
@@ -135,7 +135,7 @@ async def world_agent_tick(world: World, recent: str, with_event: bool) -> dict[
             res["event"] = str(d["event"])[:120]
             res["impact"] = d.get("impact") if d.get("impact") in ("low", "medium", "high") else "low"
             return res
-    rng = fallback.seed_rng(world.id, world.state.turn, "world")
+    rng = fallback.seed_rng(fallback.story_key(world), world.state.turn, "world")
     res["event"] = rng.choice(WORLD_EVENTS)
     res["impact"] = rng.choice(["low", "medium"])
     return res

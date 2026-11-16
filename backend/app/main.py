@@ -26,7 +26,7 @@ log = logging.getLogger("zhimeng")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # 路由模块（按功能拆分）；缺失的模块跳过，保证入口始终可导入
-ROUTE_MODULES = ["worlds", "play", "memory", "god", "media", "ui", "safety", "education", "save", "auth", "users", "debug"]
+ROUTE_MODULES = ["worlds", "play", "memory", "god", "media", "ui", "safety", "education", "save", "auth", "users", "debug", "branches"]
 
 
 @asynccontextmanager

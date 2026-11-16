@@ -73,9 +73,11 @@ async def add_memories(world_id: str, entries: list[dict[str, Any]]) -> list[str
     entries = [e for e in entries if (e.get("content") or "").strip()]
     if not entries:
         return []
+    from app.services.repo import branch_tag
     rows = [MemoryRow(id=f"m_{uuid.uuid4().hex[:12]}", world_id=world_id, kind=e.get("kind", "fact"),
                       content=e["content"].strip(), turn=int(e.get("turn", 0)), chapter=int(e.get("chapter", 1)),
-                      refs=e.get("refs") or {}) for e in entries]
+                      refs=e.get("refs") or {}, branch_id=branch_tag(world_id, int(e.get("turn", 0)), e.get("branch")))
+            for e in entries]
     with session_scope() as s:
         s.add_all(rows)
     await _index(world_id, rows)
@@ -95,7 +97,7 @@ async def _index(world_id: str, rows: list[MemoryRow]) -> str:
 
 def list_memories(world_id: str, kind: str | None = None, limit: int = 100) -> list[MemoryRow]:
     with session_scope() as s:
-        q = select(MemoryRow).where(MemoryRow.world_id == world_id)
+        q = select(MemoryRow).where(MemoryRow.world_id == world_id, MemoryRow.active == True)  # noqa: E712  v1.5 当前路径
         if kind:
             q = q.where(MemoryRow.kind == kind)
         return list(s.exec(q.order_by(col(MemoryRow.turn).desc(), col(MemoryRow.created_at).desc()).limit(limit)).all())
@@ -103,10 +105,11 @@ def list_memories(world_id: str, kind: str | None = None, limit: int = 100) -> l
 
 def delete_from_turn(world_id: str, turn: int) -> None:
     """Remove memories created at/after ``turn`` (used when retrying the last turn).
-    上帝视角注入（kind=injected）是用户干预的留痕，重试时保留。"""
+    上帝视角注入（kind=injected）是用户干预的留痕，重试时保留。v1.5：只删当前路径上的。"""
     with session_scope() as s:
         ids = [r.id for r in s.exec(select(MemoryRow).where(MemoryRow.world_id == world_id, MemoryRow.turn >= turn,
-                                                            MemoryRow.kind != "injected"))
+                                                            MemoryRow.kind != "injected",
+                                                            MemoryRow.active == True))  # noqa: E712
                if (r.refs or {}).get("origin") != "tick"]  # 手动推进的记忆同样保留
         s.exec(delete(MemoryRow).where(col(MemoryRow.id).in_(ids)))  # type: ignore[call-overload]
     for p in ("hash", "dashscope"):
@@ -127,7 +130,8 @@ def redact_turn_memories(world_id: str, turn_id: str, safe_text: str) -> int:
         if ids:
             s.exec(delete(MemoryRow).where(col(MemoryRow.id).in_(ids)))  # type: ignore[call-overload]
             s.add(MemoryRow(id=f"m_{uuid.uuid4().hex[:12]}", world_id=world_id, content=safe_text[:200], kind="event",
-                            turn=turn, chapter=chapter, refs={"turn_id": turn_id, "redacted": True}))
+                            turn=turn, chapter=chapter, refs={"turn_id": turn_id, "redacted": True},
+                            branch_id=rows[0].branch_id, active=rows[0].active))
     for p in ("hash", "dashscope"):
         try:
             if ids:
@@ -145,6 +149,13 @@ def delete_world(world_id: str) -> None:
             _collection(p).delete(where={"world_id": world_id})
         except Exception:  # noqa: BLE001
             pass
+
+
+def inactive_count(world_id: str) -> int:
+    from sqlalchemy import func
+    with session_scope() as s:
+        return int(s.exec(select(func.count()).select_from(MemoryRow).where(
+            MemoryRow.world_id == world_id, MemoryRow.active == False)).one())  # noqa: E712
 
 
 def _lexical(query: str, text: str) -> float:
@@ -176,10 +187,12 @@ async def search(world_id: str, query: str, top_k: int = 5, kinds: list[str] | N
         missing = [rows[i] for i in rows if i not in set(indexed)]
         if missing:  # back-fill (provider switched, or index lost)
             await _index(world_id, missing)
-        res = coll.query(query_embeddings=vecs, n_results=min(max(top_k * 3, 10), len(rows)),
-                         where={"world_id": world_id})
+        # v1.5：向量库里还有其它支线的记忆（不在 rows 里），多取这么多条，保证当前路径的候选不被挤掉
+        n = min(max(top_k * 3, 10) + inactive_count(world_id), (len(indexed) + len(missing)) or len(rows))
+        res = coll.query(query_embeddings=vecs, n_results=max(1, n), where={"world_id": world_id})
         for mid, dist in zip(res["ids"][0], res["distances"][0]):
-            scores[mid] = max(0.0, 1.0 - float(dist))
+            if mid in rows:
+                scores[mid] = max(0.0, 1.0 - float(dist))
     except Exception as e:  # noqa: BLE001
         if not (provider == "hash" and llm_ok()):
             log.warning("chroma query failed, lexical only: %s", e)

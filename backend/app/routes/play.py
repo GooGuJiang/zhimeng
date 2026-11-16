@@ -33,7 +33,9 @@ async def list_turns(world_id: str, limit: int = Query(50, ge=1, le=1000)):
 @router.get("/worlds/{world_id}/options")
 async def options(world_id: str):
     w = world_or_404(world_id)
-    return {"options": [o.model_dump() for o in current_options(w)]}
+    from app.services import branches
+    opts = current_options(w)
+    return {"options": [o.model_dump() for o in opts], "taken": branches.taken_map(w, branches.head_row(w), opts)}
 
 
 @router.get("/worlds/{world_id}/events", response_model=list[WorldEvent])

@@ -42,7 +42,7 @@ async def export(world_id: str):
 def _turn_rows(world_id: str) -> list[TurnRow]:
     from sqlmodel import select
     with session_scope() as s:
-        return list(s.exec(select(TurnRow).where(TurnRow.world_id == world_id)).all())
+        return list(s.exec(select(TurnRow).where(TurnRow.world_id == world_id, TurnRow.active == True)).all())  # noqa: E712  v1.5 当前路径
 
 
 def _dt(v: Any) -> datetime:
@@ -71,6 +71,7 @@ async def import_save(save: dict[str, Any] = Body(...)):
         raise HTTPException(400, v.message or "存档内容未通过安全审核")
     old_id, wid = world.id, repo.new_id("w")
     world.id, world.created_at = wid, ""
+    world.head_turn_id, world.branch_id = None, "main"  # v1.5：存档只含一条路径 → 导入后整条作为主线
     repo.save_world(world)
     ev_map: dict[str, str] = {}
     for e in sorted(save.get("events") or [], key=lambda e: str(e.get("timestamp", ""))):
@@ -81,16 +82,19 @@ async def import_save(save: dict[str, Any] = Body(...)):
         if e.get("seen"):
             repo.mark_events([ne.id], seen=True)
     snaps = save.get("turn_snapshots") or {}
+    prev: str | None = None
     with session_scope() as s:
-        for t in save.get("turns") or []:
+        for t in sorted(save.get("turns") or [], key=lambda t: int(t.get("index", 0))):
             snap = dict(snaps.get(t.get("id"), {}) or {})
             if snap.get("world"):
-                snap["world"] = {**snap["world"], "id": wid}
-            s.add(TurnRow(id=repo.new_id("t"), world_id=wid, index=int(t["index"]), chapter=int(t.get("chapter", 1)),
+                snap["world"] = {**snap["world"], "id": wid, "head_turn_id": prev, "branch_id": "main"}
+            nid = repo.new_id("t")
+            s.add(TurnRow(id=nid, parent_turn_id=prev, branch_id="main", world_id=wid, index=int(t["index"]), chapter=int(t.get("chapter", 1)),
                           action=t.get("action", ""), narration=t.get("narration", ""), options=t.get("options") or [],
                           facts=t.get("facts") or [], event_ids=[ev_map[e["id"]] for e in t.get("events") or [] if e.get("id") in ev_map],
                           key_scene=bool(t.get("key_scene")), source=str(t.get("source") or "llm"), state_before=snap,
                           created_at=_dt(t.get("created_at"))))
+            prev = nid
         for sm in save.get("summaries") or []:
             s.add(SummaryRow(id=repo.new_id("sm"), world_id=wid, chapter=int(sm["chapter"]), from_turn=int(sm["from_turn"]),
                              to_turn=int(sm["to_turn"]), summary=sm.get("summary", "")))
@@ -106,6 +110,9 @@ async def import_save(save: dict[str, Any] = Body(...)):
     await store.add_memories(wid, [{"content": m.get("content", ""), "kind": m.get("kind", "fact"), "turn": int(m.get("turn", 0)),
                                     "chapter": int(m.get("chapter", 1)), "refs": m.get("refs") or {}}
                                    for m in save.get("memories") or []])
+    if prev:
+        world.head_turn_id = prev
+        repo.save_world(world)
     return world
 
 

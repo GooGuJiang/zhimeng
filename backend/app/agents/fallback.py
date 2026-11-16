@@ -157,6 +157,12 @@ def seed_rng(*parts: Any) -> random.Random:
     return random.Random(int(hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()[:16], 16))
 
 
+def story_key(world: Any) -> str:
+    """v1.5：兜底随机数的稳定种子 —— 只取世界设定（标题/模式/开场），不用随机生成的世界 id：
+    同样的设定 + 同样的选择顺序 → 每次叙事、选项、状态完全相同（录屏可复现）。"""
+    return f"{getattr(world, 'title', '')}|{getattr(world, 'mode', '')}|{(getattr(world, 'opening_scene', '') or '')[:24]}"
+
+
 def pick_template(prompt: str, genre: str | None = None) -> dict[str, Any]:
     text = f"{prompt} {genre or ''}"
     best, score = TEMPLATES["adventure"], 0
@@ -275,7 +281,7 @@ def detect_location(world: Any, action: str) -> str | None:
 
 
 def narrate(world: Any, action: str, focus: Any | None, events: list[str], injects: list[str], turn: int) -> str:
-    rng = seed_rng(world.id, turn, action)
+    rng = seed_rng(story_key(world), turn, action)
     loc = world.loc(world.state.player_location_id)
     act = second_person(action)
     parts = [rng.choice(NARRATION_BITS["open"]).format(act=act)]
@@ -283,9 +289,12 @@ def narrate(world: Any, action: str, focus: Any | None, events: list[str], injec
         parts.append(rng.choice(NARRATION_BITS["scene"]).format(loc=loc.name, desc=loc.description))
     for inj in injects:
         parts.append(rng.choice(NARRATION_BITS["inject"]).format(inject=inj.rstrip("。")))
-    if focus:
+    reaction = reaction_line(world, action)
+    if focus and not reaction:
         parts.append(rng.choice(NARRATION_BITS["npc"]).format(npc=focus.name, npc_action=rng.choice(NPC_ACTIONS),
                                                             line=rng.choice(NPC_LINES)))
+    if reaction:  # v1.5：点选的分支要在叙事里看得见后果
+        parts.append(reaction)
     for e in events[:1]:
         parts.append(rng.choice(NARRATION_BITS["event"]).format(event=e.rstrip("。") + "。"))
     if world.mode == "education" and world.knowledge_cards:
@@ -295,21 +304,120 @@ def narrate(world: Any, action: str, focus: Any | None, events: list[str], injec
     return "".join(parts)
 
 
-def options_for(world: Any, turn: int) -> list[dict[str, str]]:
-    rng = seed_rng(world.id, turn, "opt")
+# ---------------------------------------------------------------- v1.5 角色分支选择
+TRUST_WORDS = ("相信", "答应", "帮", "跟着", "信任", "合作")
+DOUBT_WORDS = ("质疑", "怀疑", "揭穿", "拒绝", "戳穿")
+TALK_WORDS = ("问", "聊", "打听", "请教", "商量", "找")
+LOOK_RE = re.compile(r"(?:调查|查看|检查|翻看|研究|搜查)([^，,。！!？?；;]{1,10})")
+
+
+def _named(world: Any, text: str) -> Any | None:
+    """文本里点名的第一个角色（按出现位置）。"""
+    hits = [(text.find(c.name), c) for c in world.npcs() if c.name and c.name in text]
+    return min(hits, key=lambda x: x[0])[1] if hits else None
+
+
+def hint_for(world: Any, text: str) -> tuple[str, str | None]:
+    """选项的简短后果提示（≤16 字）和牵涉的角色 id（没有则 None）。纯中文、无技术用语。"""
+    c = _named(world, text)
+    if c:
+        if any(w in text for w in DOUBT_WORDS):
+            return f"{c.name}可能翻脸，也可能说漏嘴"[:16], c.id
+        if any(w in text for w in TRUST_WORDS):
+            return f"{c.name}会更信任你", c.id
+        return f"{c.name}或许会透露更多", c.id
+    dest = detect_location(world, text)
+    if dest and (l := world.loc(dest)):
+        return f"场景将转到{l.name}"[:16], None
+    if LOOK_RE.search(text) or any(w in text for w in ("读", "翻开", "拆开")):
+        return "可能找到关键线索", None
+    if any(w in text for w in ("观望", "等待", "静观")):
+        return "先不动声色，看局势变化", None
+    if any(w in text for w in ("整理", "回想", "回顾")):
+        return "把已知的事再理一遍", None
+    if any(w in text for w in TALK_WORDS):
+        return "也许能听到新消息", None
+    return "故事会朝这个方向发展", None
+
+
+def fill_hints(world: Any, options: list[Any]) -> list[Any]:
+    """给缺少后果提示的选项补上 hint / character_id（Option 对象或 dict 都可）。"""
+    out = []
+    for o in options:
+        d = dict(o) if isinstance(o, dict) else o.model_dump()
+        if not (d.get("hint") or "").strip() or not d.get("character_id"):
+            h, cid = hint_for(world, str(d.get("text") or ""))
+            d["hint"] = (d.get("hint") or "").strip()[:20] or h
+            d["character_id"] = d.get("character_id") or cid
+        if d.get("character_id") and not world.char(d["character_id"]):
+            d["character_id"] = None
+        out.append(d if isinstance(o, dict) else type(o)(**d))
+    return out
+
+
+def reaction_line(world: Any, action: str) -> str:
+    """点选分支后的确定性后果描写（兜底叙事用），让不同选择的剧情明显不同。"""
+    c = _named(world, action)
+    if c and any(w in action for w in DOUBT_WORDS):
+        return f"{c.name}的脸色一沉，空气仿佛凝固了。“你这是什么意思？”{c.name}后退半步，眼神里多了几分戒备，却也在慌乱中说漏了一句：“……那晚的事，不是我一个人的主意。”"
+    if c and any(w in action for w in TRUST_WORDS):
+        return f"{c.name}明显松了口气，神情缓和下来。“谢谢你肯信我。”{c.name}压低声音，把一件从没对别人讲过的事告诉了你，并约你稍后一起行动。"
+    m = LOOK_RE.search(action)
+    if m:
+        return f"你在{m.group(1).strip()}上发现了一处不寻常的痕迹——这显然是有人刻意留下的记号。"
+    return ""
+
+
+def consequences(world: Any, action: str) -> dict[str, Any]:
+    """点选分支对世界状态的确定性影响（兜底抽取用）：好感/情绪、线索物品、事实。"""
+    out: dict[str, Any] = {"character_updates": [], "items_gained": [], "facts": [], "stats_delta": {}}
+    c = _named(world, action)
+    if c:
+        if any(w in action for w in DOUBT_WORDS):
+            out["character_updates"].append({"id": c.id, "mood": "恼怒", "affinity_delta": -8})
+            out["facts"].append(f"你当面质疑了{c.name}，{c.name}说漏了嘴")
+            if "勇气" in world.state.stats:
+                out["stats_delta"]["勇气"] = 3
+        elif any(w in action for w in TRUST_WORDS):
+            out["character_updates"].append({"id": c.id, "mood": "感激", "affinity_delta": 8})
+            out["facts"].append(f"你选择相信{c.name}，{c.name}约你一起行动")
+        elif any(w in action for w in TALK_WORDS):
+            out["character_updates"].append({"id": c.id, "affinity_delta": 3})
+            out["facts"].append(f"你和{c.name}谈了一番")
+    m = LOOK_RE.search(action)
+    if m:
+        thing = m.group(1).strip()
+        out["items_gained"].append({"name": f"{thing}的线索"[:10], "description": f"在{thing}上发现的记号"})
+        out["facts"].append(f"你在{thing}上发现了刻意留下的记号")
+    return out
+
+
+def options_for(world: Any, turn: int, action: str = "") -> list[dict[str, Any]]:
+    """兜底的角色分支选项（2–4 个，每个带后果提示）。种子只用世界设定 + 回合 + 地点 + 上一步行动 → 稳定可复现。"""
+    rng = seed_rng(story_key(world), turn, world.state.player_location_id, action, "opt")
     loc = world.loc(world.state.player_location_id)
-    opts: list[str] = []
-    npcs_here = [c for c in world.npcs() if c.location_id == world.state.player_location_id]
+    opts: list[dict[str, Any]] = []
+    npcs_here = [c for c in world.npcs() if c.location_id == world.state.player_location_id and c.status != "离场"]
     if npcs_here:
-        opts.append(f"向{rng.choice(npcs_here).name}追问细节")
+        c = rng.choice(npcs_here)
+        opts.append({"text": f"相信{c.name}，答应帮忙", "hint": f"{c.name}会更信任你", "character_id": c.id})
+        opts.append({"text": f"当面质疑{c.name}", "hint": f"{c.name}可能翻脸，也可能说漏嘴"[:16], "character_id": c.id})
+    else:
+        away = [c for c in world.npcs() if c.status != "离场" and world.loc(c.location_id)]
+        if away:
+            c = rng.choice(away)
+            l = world.loc(c.location_id)
+            opts.append({"text": f"去{l.name}找{c.name}问个明白", "hint": f"见到{c.name}，场景转到{l.name}"[:16],
+                         "character_id": c.id})
     if loc and loc.interactables:
-        opts.append(f"调查{rng.choice(loc.interactables)}")
+        opts.append({"text": f"调查{rng.choice(loc.interactables)}", "hint": "可能找到关键线索", "character_id": None})
     if loc and loc.connections:
         nxt = world.loc(rng.choice(loc.connections))
-        if nxt:
-            opts.append(f"前往{nxt.name}")
-    for extra in ["整理手头的线索", "暂时观望，静观其变", "找个可靠的人商量"]:
+        if nxt and not any(nxt.name in o["text"] for o in opts):
+            opts.append({"text": f"前往{nxt.name}", "hint": f"离开这里，去{nxt.name}看看"[:16], "character_id": None})
+    for text, hint in [("整理手头的线索", "把已知的事再理一遍"), ("暂时观望，静观其变", "先不动声色，看局势变化"),
+                       ("找个可靠的人商量", "也许能听到新消息")]:
         if len(opts) >= 3:
             break
-        opts.append(extra)
-    return [{"id": f"opt_{i + 1}", "text": o} for i, o in enumerate(opts[:3])]
+        opts.append({"text": text, "hint": hint, "character_id": None})
+    return [{"id": f"opt_{i + 1}", **o} for i, o in enumerate(opts[:4])]

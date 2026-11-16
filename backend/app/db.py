@@ -62,6 +62,12 @@ class TurnRow(SQLModel, table=True):
     client_turn_id: str | None = Field(default=None, index=True)
     state_before: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # snapshot for retry
     created_at: datetime = Field(default_factory=utcnow)
+    # v1.5 剧情树：上一回合（None = 开局）、所在剧情线、点选的选项、是否在当前路径上、回合结束时的世界快照（回到此节点用）
+    parent_turn_id: str | None = Field(default=None, index=True)
+    branch_id: str = "main"
+    option_id: str | None = None
+    active: bool = True
+    state_after: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 class EventRow(SQLModel, table=True):
@@ -80,6 +86,8 @@ class EventRow(SQLModel, table=True):
     consumed: bool = False  # injected events: woven into narration yet?
     origin: str = "turn"    # turn | tick（上帝视角手动推进，独立于回合重试保留）| god
     timestamp: datetime = Field(default_factory=utcnow)
+    branch_id: str = "main"  # v1.5：产生于哪条剧情线（turn<=0 一律 main）
+    active: bool = True      # v1.5：是否在当前路径上（回到其它节点时重算）
 
 
 class MemoryRow(SQLModel, table=True):
@@ -92,6 +100,8 @@ class MemoryRow(SQLModel, table=True):
     chapter: int = 1
     refs: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow)
+    branch_id: str = "main"  # v1.5：产生于哪条剧情线（turn<=0 一律 main）
+    active: bool = True      # v1.5：是否在当前路径上（回到其它节点时重算）
 
 
 class SummaryRow(SQLModel, table=True):
@@ -103,6 +113,8 @@ class SummaryRow(SQLModel, table=True):
     to_turn: int
     summary: str
     created_at: datetime = Field(default_factory=utcnow)
+    branch_id: str = "main"  # v1.5：产生于哪条剧情线（turn<=0 一律 main）
+    active: bool = True      # v1.5：是否在当前路径上（回到其它节点时重算）
 
 
 class TrajectoryRow(SQLModel, table=True):
@@ -116,6 +128,8 @@ class TrajectoryRow(SQLModel, table=True):
     mood: str = ""
     origin: str = "turn"
     timestamp: datetime = Field(default_factory=utcnow)
+    branch_id: str = "main"  # v1.5：产生于哪条剧情线（turn<=0 一律 main）
+    active: bool = True      # v1.5：是否在当前路径上（回到其它节点时重算）
 
 
 class AssetRow(SQLModel, table=True):
@@ -142,6 +156,18 @@ def _asset_bump(_mapper, _conn, target: AssetRow) -> None:  # noqa: ANN001
     if st.attrs.url.history.has_changes() or st.attrs.source.history.has_changes():
         target.version = (target.version or 1) + 1
         target.updated_at = utcnow()
+
+
+class BranchRow(SQLModel, table=True):
+    """v1.5 剧情线：从 fork_turn_id（None = 开局）分出；main 没有行（隐式存在）。"""
+    __tablename__ = "branches"
+    id: str = Field(primary_key=True)
+    world_id: str = Field(index=True, primary_key=True)
+    parent_branch_id: str = "main"
+    fork_turn_id: str | None = None
+    fork_index: int = 0
+    seq: int = 1  # 创建顺序 → 「支线N」
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class ReportRow(SQLModel, table=True):
@@ -229,8 +255,13 @@ def get_engine():
 
 
 # 轻量迁移：给旧库补新增列（SQLite create_all 不会改已有表）
-_MIGRATIONS = {"turns": [("source", "VARCHAR DEFAULT 'llm'")],
-               "assets": [("version", "INTEGER DEFAULT 1"), ("updated_at", "DATETIME")], "events": [("origin", "VARCHAR DEFAULT 'turn'")], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'")],
+_BR = [("branch_id", "VARCHAR DEFAULT 'main'"), ("active", "BOOLEAN DEFAULT 1")]
+_MIGRATIONS = {"turns": [("source", "VARCHAR DEFAULT 'llm'"),
+                         # v1.5 剧情树（旧回合 = 主线）
+                         ("parent_turn_id", "VARCHAR"), ("option_id", "VARCHAR"), ("state_after", "JSON"), *_BR],
+               "assets": [("version", "INTEGER DEFAULT 1"), ("updated_at", "DATETIME")],
+               "events": [("origin", "VARCHAR DEFAULT 'turn'"), *_BR], "trajectories": [("origin", "VARCHAR DEFAULT 'turn'"), *_BR],
+               "summaries": list(_BR), "memories": list(_BR),
                # v1.4 用户系统：数据归属
                "worlds": [("owner_id", "VARCHAR"), ("origin", "VARCHAR DEFAULT 'generated'")],
                "reports": [("reporter_id", "VARCHAR")]}
@@ -245,9 +276,26 @@ def _migrate(engine) -> None:  # noqa: ANN001
                 if name not in have:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_worlds_owner_id ON worlds (owner_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_turns_parent_turn_id ON turns (parent_turn_id)"))
+        _migrate_branches(conn)
     # v1.4：建 demo 账号；旧数据（owner_id 为空）归 u_demo
     from app.auth.bootstrap import bootstrap
     bootstrap(engine)
+
+
+def _migrate_branches(conn) -> None:  # noqa: ANN001
+    """v1.5：旧回合串成主线 —— 每个世界里 parent_turn_id 为空且 index>1 的主线回合，父节点 = 主线上 index-1 的回合（幂等）。"""
+    from sqlalchemy import text
+    rows = conn.execute(text("SELECT id, world_id, \"index\" FROM turns WHERE parent_turn_id IS NULL AND \"index\" > 1 "
+                             "AND (branch_id IS NULL OR branch_id = 'main')")).fetchall()
+    for tid, wid, idx in rows:
+        p = conn.execute(text("SELECT id FROM turns WHERE world_id = :w AND \"index\" = :i AND (branch_id IS NULL OR branch_id = 'main') "
+                              "ORDER BY created_at LIMIT 1"), {"w": wid, "i": idx - 1}).fetchone()
+        if p:
+            conn.execute(text("UPDATE turns SET parent_turn_id = :p WHERE id = :t"), {"p": p[0], "t": tid})
+    for t in ("turns", "events", "trajectories", "summaries", "memories"):
+        conn.execute(text(f"UPDATE {t} SET branch_id = 'main' WHERE branch_id IS NULL"))
+        conn.execute(text(f"UPDATE {t} SET active = 1 WHERE active IS NULL"))
 
 
 def reset_engine() -> None:

@@ -97,6 +97,7 @@ def normalize_world(data: dict[str, Any], *, world_id: str, req: GenerateWorldRe
         rating="all" if req.minor_mode else req.rating, minor_mode=req.minor_mode, source=source)  # type: ignore[arg-type]
     if not world.opening_options:
         world.opening_options = [Option(**o) for o in fallback.options_for(world, 0)]
+    world.opening_options = fallback.fill_hints(world, world.opening_options)  # v1.5：开局选项也带后果提示
     return world
 
 
@@ -441,7 +442,7 @@ def _merge(world: World, d: dict[str, Any]) -> None:
         opts = [o.get("text") if isinstance(o, dict) else o for o in d.get("opening_options") or []]
         opts = [_s(o) for o in opts if _s(o)][:4]
         if opts:
-            world.opening_options = [Option(id=f"opt_{i + 1}", text=o) for i, o in enumerate(opts)]
+            world.opening_options = fallback.fill_hints(world, [Option(id=f"opt_{i + 1}", text=o) for i, o in enumerate(opts)])
         items = [it for it in d.get("items") or [] if isinstance(it, dict) and _s(it.get("name"))][:12]
         if items:
             world.items = [Item(id=f"it_{i + 1}", name=_s(it["name"]), description=_s(it.get("description")),

@@ -28,7 +28,7 @@ from app.db import TurnRow, session_scope, utcnow
 from app.memory import store
 from app.schemas import AI_LABEL, Citation, Item, KnowledgeCard, Option, Turn, TurnRequest, World, WorldEvent
 from app.services import assets as assets_svc
-from app.services import guard, repo
+from app.services import branches, guard, repo
 from app.ui.components import build_components
 
 log = logging.getLogger("zhimeng.turn")
@@ -49,7 +49,8 @@ class TurnCtx:
     """一次回合的可变上下文（不进 LangGraph 状态合并，只在节点间共享）。"""
 
     def __init__(self, world: World, action: str, *, option_id: str | None, client_turn_id: str | None,
-                 replace_index: int | None, reused_inject_ids: list[str], emit: Emit):
+                 replace_index: int | None, reused_inject_ids: list[str], emit: Emit,
+                 plan: dict[str, Any] | None = None, chosen: Option | None = None):
         self.snapshot = world.model_dump(mode="json")  # 回合前快照（重试用）
         self.world = world
         self.action = action
@@ -82,6 +83,12 @@ class TurnCtx:
         self.source = "fallback"  # 旁白来源：llm | fallback（写入 Turn.source）
         self.review: Any = None    # 输入的后台 LLM 复核任务（check_input_fast）
         self.flagged: Any = None   # 复核命中的 SafetyResult（blocked/crisis）→ 本回合不提交
+        # v1.5 剧情树：本回合落在哪条线、父节点、是否新开支线；点选的选项（用于导演 Agent 的分支走向）
+        plan = plan or {"branch_id": world.branch_id or "main", "parent_turn_id": world.head_turn_id, "fork": None}
+        self.branch_id: str = plan["branch_id"]
+        self.parent_turn_id: str | None = plan["parent_turn_id"]
+        self.fork: dict[str, Any] | None = plan["fork"]
+        self.chosen = chosen
 
 
 class TurnState(TypedDict, total=False):
@@ -108,10 +115,11 @@ def _injections(world_id: str, reused_ids: list[str]) -> list[Any]:
 
 
 def current_options(world: World) -> list[Option]:
-    row = repo.get_turn_row(world.id, index=world.state.turn) if world.state.turn > 0 else None
-    if row:
-        return [Option(**o) for o in row.options]
-    return list(world.opening_options)
+    """当前节点的选项（v1.5：以 head_turn_id 为准；缺后果提示的旧选项补上 hint）。"""
+    from app.services.branches import head_row
+    row = head_row(world)
+    opts = [Option(**o) for o in row.options] if row else list(world.opening_options)
+    return fallback.fill_hints(world, opts)
 
 
 async def _progress(ctx: TurnCtx, stage: str, message: str, pct: int) -> None:
@@ -280,7 +288,8 @@ async def node_director(state: TurnState) -> TurnState:
     async for src, chunk in director.narrate_stream(
             w, ctx.action, memory_ctx=memory_ctx, recent=ctx.recent, npc_ctx=focus_line, events_ctx=events_ctx,
             inject_ctx=inject_ctx, focus=ctx.focus, event_lines=[e.summary for e in off],
-            injects=[r.summary for r in ctx.injects], turn=ctx.index):
+            injects=[r.summary for r in ctx.injects], turn=ctx.index,
+            choice_ctx=(f"{ctx.chosen.text}（预期走向：{ctx.chosen.hint}）" if ctx.chosen and ctx.chosen.hint else "")):
         if ctx.flagged is not None:  # 输入复核命中 → 立即停止推流
             log.warning("input review flagged mid-stream → abort turn")
             break
@@ -377,17 +386,23 @@ def _apply(ctx: TurnCtx, tick: dict[str, Any], ex: dict[str, Any]) -> None:
     if ex.get("ending"):
         st.flags["ending"] = str(ex["ending"])[:200]
     # 选项：抽取器给出的 → 否则模板；保证与上一回合不同
+    # v1.5：2–4 个角色分支选项，每个带后果提示（缺的按规则补）
     opts = []
-    for i, o in enumerate((ex.get("options") or [])[:4]):
+    for o in (ex.get("options") or [])[:4]:
         text = (o.get("text") if isinstance(o, dict) else str(o)) or ""
         if text.strip():
-            opts.append(Option(id=f"opt_{i + 1}", text=text.strip()[:40], hint=(o.get("hint") if isinstance(o, dict) else None)))
+            hint = str(o.get("hint") or "").strip()[:20] if isinstance(o, dict) else ""
+            cid = str(o.get("character_id") or "") if isinstance(o, dict) else ""
+            if (named := fallback._named(w, text)) is not None:  # 文本里点名的角色优先（模型偶尔填错 id）
+                cid = named.id
+            opts.append(Option(id=f"opt_{len(opts) + 1}", text=text.strip()[:40], hint=hint or None,
+                               character_id=cid if w.char(cid) and not w.char(cid).is_player else None))  # type: ignore[union-attr]
     if len(opts) < 2:
-        opts = [Option(**o) for o in fallback.options_for(w, ctx.index)]
+        opts = [Option(**o) for o in fallback.options_for(w, ctx.index, ctx.action)]
     prev = [o.text for o in ctx.prev_options]
     if [o.text for o in opts] == prev:
         opts[-1] = Option(id=opts[-1].id, text=f"回想刚才{ctx.focus.name if ctx.focus else '发生'}的话" if ctx.focus else "回想刚才发生的一切")
-    ctx.options = opts
+    ctx.options = fallback.fill_hints(w, opts)
 
 
 def _review_committed(world: World, turn_id: str, narration: str) -> None:
@@ -436,27 +451,35 @@ async def node_persist(state: TurnState) -> TurnState:
     key = multimodal.is_key_scene(ctx.index, [e.model_dump() for e in ctx.events],
                                   ending=bool(ctx.extraction.get("ending")))
     turn_id = repo.new_id("t")
+    br = ctx.branch_id
     try:
+        if ctx.fork:  # v1.5：从已有后续剧情的节点再走一步 → 新开一条支线
+            branches.create_branch(w.id, ctx.fork)
         names = {c.id: c.name for c in w.characters}
         tick_ids = {r.id for r in ctx.ticks}
         for e in ctx.events:
             if e.type != "injected" and e.id not in tick_ids:
                 repo.add_event(w.id, id=e.id, type=e.type, summary=e.summary, actor_ids=e.actor_ids,
                                location_id=e.location_id, turn=e.turn, chapter=e.chapter, impact=e.impact,
-                               in_world_time=e.in_world_time)
+                               in_world_time=e.in_world_time, branch_id=br)
         repo.mark_events(inject_ids, consumed=True)
         for u in ctx.npc_updates:
             c = w.char(u["id"])
             if c:
-                repo.add_trajectory(w.id, c.id, ctx.index, c.location_id, str(u.get("action"))[:120], c.mood)
+                repo.add_trajectory(w.id, c.id, ctx.index, c.location_id, str(u.get("action"))[:120], c.mood, branch_id=br)
         facts = [str(f) for f in ctx.extraction.get("facts") or []]
+        if w.status == "draft":
+            w.status = "active"
+        w.head_turn_id, w.branch_id = turn_id, br
         with session_scope() as s:
             s.add(TurnRow(id=turn_id, world_id=w.id, index=ctx.index, chapter=ctx.chapter, action=ctx.action,
                           narration=ctx.narration, options=[o.model_dump() for o in ctx.options], facts=facts,
                           source=ctx.source,
                           event_ids=[e.id for e in ctx.events], key_scene=key, client_turn_id=ctx.client_turn_id,
-                          state_before={"world": ctx.snapshot, "consumed": inject_ids, "option_id": ctx.option_id}))
-        base = {"turn": ctx.index, "chapter": ctx.chapter}
+                          state_before={"world": ctx.snapshot, "consumed": inject_ids, "option_id": ctx.option_id},
+                          parent_turn_id=ctx.parent_turn_id, branch_id=br,
+                          option_id=ctx.option_id if ctx.chosen else None, state_after=w.model_dump(mode="json")))
+        base = {"turn": ctx.index, "chapter": ctx.chapter, "branch": br}
         mems = [{"content": f"第{ctx.index}回合，你{fallback.second_person(ctx.action)}。{ctx.narration[:100]}", "kind": "event",
                  **base, "refs": {"turn_id": turn_id}}]
         mems += [{"content": f, "kind": "fact", **base, "refs": {"turn_id": turn_id}} for f in facts]
@@ -464,19 +487,19 @@ async def node_persist(state: TurnState) -> TurnState:
                   "kind": "event", **base, "refs": {"event_id": e.id, **({"character_id": e.actor_ids[0]} if e.actor_ids else {})}}
                  for e in ctx.events if e.type != "injected" and e.id not in tick_ids]
         await store.add_memories(w.id, mems)
-        if w.status == "draft":
-            w.status = "active"
         repo.save_world(w)
     except Exception:
         log.exception("persist failed → rollback to pre-turn snapshot")
         repo.rollback_from_turn(w.id, ctx.index)
         repo.mark_events(inject_ids, consumed=False)
+        if ctx.fork:
+            branches.drop_branch(w.id, ctx.fork["id"])
         repo.save_world(snapshot_world)
         raise
     # 章节末：摘要压缩（失败不影响本回合）
     if ctx.index % get_settings().chapter_size == 0:
         try:
-            await _compress_chapter(w, ctx.chapter)
+            await _compress_chapter(w, ctx.chapter, br)
         except Exception:  # noqa: BLE001
             log.exception("chapter summary failed")
     _review_committed(w, turn_id, ctx.narration)
@@ -488,16 +511,16 @@ async def node_persist(state: TurnState) -> TurnState:
     return {"committed": True}
 
 
-async def _compress_chapter(world: World, chapter: int) -> None:
+async def _compress_chapter(world: World, chapter: int, branch_id: str | None = None) -> None:
     turns = [t for t in repo.list_turns(world.id, limit=1000) if t.chapter == chapter]
     if not turns or any(s.chapter == chapter for s in repo.list_summaries(world.id)):
         return
     text = await director.chapter_summary(world, chapter, turns)
     v = await guard.check_output(text, minor_mode=world.minor_mode, rating=world.rating)
     text = v.filtered_text or text
-    repo.add_summary(world.id, chapter, turns[0].index, turns[-1].index, text)
+    repo.add_summary(world.id, chapter, turns[0].index, turns[-1].index, text, branch_id=branch_id)
     await store.add_memories(world.id, [{"content": text, "kind": "summary", "turn": turns[-1].index,
-                                         "chapter": chapter, "refs": {"chapter": chapter}}])
+                                         "chapter": chapter, "refs": {"chapter": chapter}, "branch": branch_id}])
 
 
 # ---------------------------------------------------------------- graph
@@ -618,29 +641,60 @@ async def _run(world_id: str, req: TurnRequest | None, retry: bool, emit: Emit) 
         return
     reused: list[str] = []
     replace = None
+    plan: dict[str, Any] | None = None
     if retry:
-        last = repo.last_turn_row(world_id)
+        last = branches.head_row(world)
         if not last:
             await emit("error", {"message": "还没有可重试的回合", "retryable": False})
             return
+        if branches.has_children(world_id, last.id):  # v1.5：当前节点之后已有剧情（回到了中间节点）→ 不覆盖
+            await emit("error", {"message": "这一步之后已经有后续剧情了，可以从这里另选一个方向", "retryable": False})
+            return
         world = World.model_validate(last.state_before["world"])
+        world.head_turn_id, world.branch_id = last.parent_turn_id, last.branch_id or "main"
         reused = list(last.state_before.get("consumed") or [])
         replace = last.index
-        req = TurnRequest(action=last.action, option_id=last.state_before.get("option_id"),
+        plan = {"branch_id": last.branch_id or "main", "parent_turn_id": last.parent_turn_id, "fork": None}
+        req = TurnRequest(action=last.action or "…", option_id=repo.turn_option_id(last),
                           client_turn_id=last.client_turn_id)
     assert req is not None
     if not retry and req.client_turn_id:
         row = repo.get_turn_row(world_id, client_turn_id=req.client_turn_id)
         if row:  # 幂等：已提交 → 直接返回
-            t = repo.list_turns(world_id, limit=10_000)
-            turn = next(x for x in t if x.id == row.id)
-            await emit("done", {"turn": turn.model_dump(), "state": world.state.model_dump(), "idempotent": True})
+            from sqlmodel import col, select
+
+            from app.db import EventRow
+            with session_scope() as s:
+                evs = {e.id: repo.event_out(e) for e in s.exec(select(EventRow).where(col(EventRow.id).in_(row.event_ids or [""])))}
+            turn = repo.turn_out(row, [evs[i] for i in row.event_ids if i in evs])
+            await emit("done", {"turn": turn.model_dump(), "state": world.state.model_dump(), "idempotent": True,
+                                "branch": {"branch_id": row.branch_id or "main", "label": branches.label_of(world_id, row.branch_id or "main"),
+                                           "forked": False, "head_turn_id": world.head_turn_id or row.id}})
             return
+    if not retry and req.from_turn_id is not None:  # v1.5：从指定节点出发（一次请求完成「回到分支点另选」）
+        target = None if req.from_turn_id in ("", branches.OPENING) else req.from_turn_id
+        cur = branches.head_row(world)
+        if target != (cur.id if cur else None):
+            try:
+                world = branches.checkout(world, target)
+            except branches.BranchError as e:
+                await emit("error", {"message": str(e), "retryable": False})
+                return
     action = req.action.strip()
-    if req.option_id and not action:
-        action = next((o.text for o in current_options(world) if o.id == req.option_id), action)
+    chosen = None
+    if req.option_id:
+        opts = current_options(world)
+        chosen = next((o for o in opts if o.id == req.option_id), None)
+        if chosen is None and not action:
+            await emit("error", {"message": "这个选项已经不能选了，请重新选择", "retryable": False})
+            return
+        if chosen is not None and action and action != chosen.text:
+            chosen = chosen if chosen.text in action else None  # 自己改写了文字 → 当作自由输入
+        action = action or (chosen.text if chosen else "")
+    if plan is None:
+        plan = branches.plan_next(world)
     ctx = TurnCtx(world, action, option_id=req.option_id, client_turn_id=req.client_turn_id,
-                  replace_index=replace, reused_inject_ids=reused, emit=emit)
+                  replace_index=replace, reused_inject_ids=reused, emit=emit, plan=plan, chosen=chosen)
     try:
         out = await GRAPH.ainvoke({"ctx": ctx})
     finally:
@@ -657,7 +711,9 @@ async def _run(world_id: str, req: TurnRequest | None, retry: bool, emit: Emit) 
     assert turn is not None
     if turn.key_scene:
         await key_scene_media(ctx.world, turn, ctx.narration, emit)
-    await emit("done", {"turn": turn.model_dump(), "state": ctx.world.state.model_dump()})
+    await emit("done", {"turn": turn.model_dump(), "state": ctx.world.state.model_dump(),
+                        "branch": {"branch_id": ctx.branch_id, "label": branches.label_of(world_id, ctx.branch_id),
+                                   "forked": bool(ctx.fork), "head_turn_id": turn.id}})
 
 
 # ---------------------------------------------------------------- god tick (F7)

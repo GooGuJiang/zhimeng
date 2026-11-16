@@ -67,7 +67,7 @@ STYLE_LAYER = ("【叙事风格】第二人称“你”，沉浸式、有画面�
 
 
 def director_messages(world: World, action: str, memory_ctx: str, recent: str, npc_ctx: str,
-                      events_ctx: str, inject_ctx: str, minor_mode: bool) -> list[dict[str, str]]:
+                      events_ctx: str, inject_ctx: str, minor_mode: bool, choice_ctx: str = "") -> list[dict[str, str]]:
     sys = "\n".join([SAFETY_LAYER, "你是导演Agent，负责编排叙事节奏，把场外事件和上帝视角插入的事件自然编织进主线，并保持与世界记忆一致。",
                      world_brief(world), STYLE_LAYER])
     if world.mode == "education":
@@ -76,7 +76,9 @@ def director_messages(world: World, action: str, memory_ctx: str, recent: str, n
         sys += "\n【未成年人模式】内容适合全年龄。"
     user = (f"【相关世界记忆（必须保持一致，不得矛盾）】\n{memory_ctx or '无'}\n\n【最近剧情】\n{recent or '（开局）'}\n\n"
             f"【焦点NPC意图】\n{npc_ctx or '无'}\n\n【新近场外事件】\n{events_ctx or '无'}\n\n"
-            f"【上帝视角插入事件（必须在本回合体现）】\n{inject_ctx or '无'}\n\n【玩家行动】{action}\n\n请续写本回合叙事。")
+            f"【上帝视角插入事件（必须在本回合体现）】\n{inject_ctx or '无'}\n\n【玩家行动】{action}\n\n"
+            + (f"【玩家选择的分支】{choice_ctx}\n本回合叙事必须明确朝这个方向发展，让这个选择产生看得见的后果。\n\n" if choice_ctx else "")
+            + "请续写本回合叙事。")
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
 
 
@@ -85,7 +87,7 @@ def extract_messages(world: World, action: str, narration: str) -> list[dict[str
            "items": [i.id for i in world.items]}
     schema = """{
  "facts": ["本回合新确立的、以后需要记住的客观事实(人名/物品/线索/承诺/地点变化)，每条≤40字，2-5条"],
- "options": [{"id": "opt_1", "text": "下一步可选行动(≤20字)"}],
+ "options": [{"id": "opt_1", "text": "下一步可选行动(≤20字)", "hint": "选择后的大致后果(≤16字，不剧透结局)", "character_id": "牵涉的角色id或null"}],
  "player_location_id": "地点id或null(不变)",
  "hp_delta": 0, "stats_delta": {"属性": 整数},
  "items_gained": [{"name": "物品", "description": "描述"}], "items_lost": ["物品名"],
@@ -95,7 +97,10 @@ def extract_messages(world: World, action: str, narration: str) -> list[dict[str
  "ending": null
 }"""
     sys = ("你是事实抽取器。根据本回合叙事抽取结构化信息，严格输出 JSON：\n" + schema +
-           f"\n可用id：{json.dumps(ids, ensure_ascii=False)}\n3个选项；key_scene 仅在剧情重大转折时为 true；"
+           f"\n可用id：{json.dumps(ids, ensure_ascii=False)}\n"
+           "options 给 2-4 个「角色分支选择」，方向要明显不同（如：信任/帮助某个在场角色、质疑/对抗某个角色、独自调查、离开去别处），"
+           "每个都写 hint（一句话后果提示，如“老乔会更信任你”“可能找到关键线索”），涉及角色时填 character_id；"
+           "选项和提示都用自然的中文，不要出现“AI”“模型”“系统”等字样；key_scene 仅在剧情重大转折时为 true；"
            + ("knowledge_cards 给出0-2个与本回合相关的准确知识点；" if world.mode == "education" else "knowledge_cards 为空数组；")
            + "ending 仅在故事明确结局时填写一句结局描述。")
     return [{"role": "system", "content": sys},

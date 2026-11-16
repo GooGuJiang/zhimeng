@@ -20,14 +20,14 @@ def _chunks(text: str, size: int = 3) -> list[str]:
 
 async def narrate_stream(world: World, action: str, *, memory_ctx: str, recent: str, npc_ctx: str,
                          events_ctx: str, inject_ctx: str, focus: Any, event_lines: list[str],
-                         injects: list[str], turn: int) -> AsyncIterator[tuple[str, str]]:
+                         injects: list[str], turn: int, choice_ctx: str = "") -> AsyncIterator[tuple[str, str]]:
     """产出 (source, chunk)，source ∈ llm | fallback | reset。
 
     LLM 流在首字前整条模型链失败 → 本地模板；首字后断流先续写（chat_stream_resumable），续写也用尽 →
     产出一次 ``("reset", 原因)``，随后用本地模板**整段重写**（调用方据此通知前端清空已显示的半段旁白；BUG-006）。"""
     if llm_enabled():
         msgs = prompts.director_messages(world, action, memory_ctx, recent, npc_ctx, events_ctx, inject_ctx,
-                                         world.minor_mode)
+                                         world.minor_mode, choice_ctx=choice_ctx)
         got = False
         try:  # 首字后断流：带已输出部分续写（chat_stream_resumable），续写用尽才放弃本回合（不提交、可重试）
             async for chunk in chat_stream_resumable(msgs, temperature=0.85, max_tokens=900):
@@ -65,11 +65,17 @@ def fallback_extract(world: World, action: str, narration: str, focus: Any) -> d
         facts.append(f"你来到了{world.loc(loc_id).name}")  # type: ignore[union-attr]
     if focus is not None:
         facts.append(f"{focus.name}与你有过一番交谈")
-    rng = fallback.seed_rng(world.id, world.state.turn, action, "x")
+    rng = fallback.seed_rng(fallback.story_key(world), world.state.turn, action, "x")
     stat_keys = list(world.state.stats)
+    stats = {stat_keys[rng.randrange(len(stat_keys))]: rng.randint(1, 3)} if stat_keys else {}
+    cons = fallback.consequences(world, action)  # v1.5：点选分支的确定性后果（好感/情绪、线索、事实）
+    for k, v in cons["stats_delta"].items():
+        stats[k] = stats.get(k, 0) + v
+    facts = (facts[:1] + cons["facts"] + facts[1:])
+    gained = gained + [g for g in cons["items_gained"] if not any(x["name"] == g["name"] for x in gained)]
     return {"facts": facts[:5], "player_location_id": loc_id, "hp_delta": rng.choice([0, 0, -2, 1]),
-            "stats_delta": {stat_keys[rng.randrange(len(stat_keys))]: rng.randint(1, 3)} if stat_keys else {},
-            "items_gained": gained, "items_lost": [], "character_updates": [], "options": [],
+            "stats_delta": stats,
+            "items_gained": gained, "items_lost": [], "character_updates": cons["character_updates"], "options": [],
             "key_scene": False, "scene_prompt": "", "knowledge_cards": [], "ending": None, "source": "fallback"}
 
 
@@ -140,7 +146,7 @@ async def education_summary(world: World, timeline: list[dict[str, Any]], *, use
     key_points = [f"{k.title.split('：')[0]}：{k.content}" for k in cards][:5] or [world.premise]
     quiz = []
     for i, k in enumerate(cards[:3]):
-        rng = fallback.seed_rng(world.id, k.id, "quiz")
+        rng = fallback.seed_rng(fallback.story_key(world), k.id, "quiz")
         others = [c.content[:40] for c in cards if c.id != k.id]
         rng.shuffle(others)
         opts = [k.content[:40]] + others[:3]

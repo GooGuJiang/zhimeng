@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlmodel import col, delete, select
 
-from app.db import (CharacterRow, EventRow, SummaryRow, TrajectoryRow, TurnRow, WorldRow,
+from app.db import (BranchRow, CharacterRow, EventRow, SummaryRow, TrajectoryRow, TurnRow, WorldRow,
                     session_scope, utcnow)
 from app.schemas import Option, Turn, World, WorldEvent, WorldSummary
 
@@ -18,6 +18,21 @@ def new_id(prefix: str) -> str:
 
 def iso(d: datetime) -> str:
     return d.isoformat()
+
+
+# ---------------------------------------------------------------- v1.5 剧情线标记
+def current_branch(world_id: str) -> str:
+    """世界当前所在的剧情线（以已保存的世界为准；旧数据 = main）。"""
+    with session_scope() as s:
+        row = s.get(WorldRow, world_id)
+        return str(((row.data or {}).get("branch_id") if row else None) or "main")
+
+
+def branch_tag(world_id: str, turn: int, branch_id: str | None = None) -> str:
+    """新写入的事件/轨迹/摘要/记忆属于哪条剧情线：开局（turn<=0）一律 main（所有路径共享），否则为给定线或当前线。"""
+    if int(turn or 0) <= 0:
+        return "main"
+    return branch_id or current_branch(world_id)
 
 
 # ---------------------------------------------------------------- worlds
@@ -100,7 +115,7 @@ def delete_world(world_id: str) -> bool:
         if not row:
             return False
         s.delete(row)
-        for m in (CharacterRow, EventRow, TurnRow, TrajectoryRow, SummaryRow):
+        for m in (CharacterRow, EventRow, TurnRow, TrajectoryRow, SummaryRow, BranchRow):
             s.exec(delete(m).where(m.world_id == world_id))  # type: ignore[call-overload]
     store.delete_world(world_id)
     return True
@@ -114,6 +129,7 @@ def event_out(r: EventRow) -> WorldEvent:
 
 
 def add_event(world_id: str, **kw: Any) -> WorldEvent:
+    kw["branch_id"] = branch_tag(world_id, kw.get("turn", 0), kw.get("branch_id"))
     row = EventRow(id=kw.pop("id", None) or new_id("ev"), world_id=world_id, **kw)
     with session_scope() as s:
         s.add(row)
@@ -123,7 +139,7 @@ def add_event(world_id: str, **kw: Any) -> WorldEvent:
 def list_events(world_id: str, type_: str | None = None, limit: int = 50,
                 min_turn: int | None = None) -> list[WorldEvent]:
     with session_scope() as s:
-        q = select(EventRow).where(EventRow.world_id == world_id)
+        q = select(EventRow).where(EventRow.world_id == world_id, EventRow.active == True)  # noqa: E712
         if type_:
             q = q.where(EventRow.type == type_)
         if min_turn is not None:
@@ -135,7 +151,7 @@ def list_events(world_id: str, type_: str | None = None, limit: int = 50,
 def pending_injections(world_id: str) -> list[EventRow]:
     with session_scope() as s:
         return list(s.exec(select(EventRow).where(EventRow.world_id == world_id, EventRow.type == "injected",
-                                                  EventRow.consumed == False)).all())  # noqa: E712
+                                                  EventRow.consumed == False, EventRow.active == True)).all())  # noqa: E712
 
 
 def mark_events(ids: list[str], *, seen: bool | None = None, consumed: bool | None = None) -> None:
@@ -151,16 +167,22 @@ def mark_events(ids: list[str], *, seen: bool | None = None, consumed: bool | No
 
 
 # ---------------------------------------------------------------- turns
+def turn_option_id(r: TurnRow) -> str | None:
+    return r.option_id or (r.state_before or {}).get("option_id") or None
+
+
 def turn_out(r: TurnRow, events: list[WorldEvent] | None = None) -> Turn:
     return Turn(id=r.id, world_id=r.world_id, index=r.index, chapter=r.chapter, action=r.action,
                 narration=r.narration, options=[Option(**o) for o in r.options], events=events or [],
                 facts=r.facts, asset_ids=r.asset_ids, key_scene=r.key_scene,
-                source="fallback" if r.source == "fallback" else "llm", created_at=iso(r.created_at))
+                source="fallback" if r.source == "fallback" else "llm", created_at=iso(r.created_at),
+                parent_turn_id=r.parent_turn_id, branch_id=r.branch_id or "main", option_id=turn_option_id(r))
 
 
 def list_turns(world_id: str, limit: int = 50) -> list[Turn]:
+    """当前路径（开局 → 当前节点）上的回合，升序。"""
     with session_scope() as s:
-        rows = list(s.exec(select(TurnRow).where(TurnRow.world_id == world_id)
+        rows = list(s.exec(select(TurnRow).where(TurnRow.world_id == world_id, TurnRow.active == True)  # noqa: E712
                            .order_by(col(TurnRow.index).desc()).limit(limit)).all())
         evs = {e.id: event_out(e) for e in s.exec(select(EventRow).where(EventRow.world_id == world_id))}
     rows.reverse()
@@ -171,8 +193,8 @@ def get_turn_row(world_id: str, *, index: int | None = None, client_turn_id: str
                  turn_id: str | None = None) -> TurnRow | None:
     with session_scope() as s:
         q = select(TurnRow).where(TurnRow.world_id == world_id)
-        if index is not None:
-            q = q.where(TurnRow.index == index)
+        if index is not None:  # 按序号查只看当前路径（各支线有相同序号）
+            q = q.where(TurnRow.index == index, TurnRow.active == True)  # noqa: E712
         if client_turn_id is not None:
             q = q.where(TurnRow.client_turn_id == client_turn_id)
         if turn_id is not None:
@@ -182,54 +204,62 @@ def get_turn_row(world_id: str, *, index: int | None = None, client_turn_id: str
 
 def last_turn_row(world_id: str) -> TurnRow | None:
     with session_scope() as s:
-        return s.exec(select(TurnRow).where(TurnRow.world_id == world_id)
+        return s.exec(select(TurnRow).where(TurnRow.world_id == world_id, TurnRow.active == True)  # noqa: E712
                       .order_by(col(TurnRow.index).desc())).first()
 
 
 def rollback_from_turn(world_id: str, turn: int) -> None:
-    """Delete everything produced at/after ``turn`` (turn rows, events, trajectories, summaries, memories)."""
+    """Delete everything produced at/after ``turn`` (turn rows, events, trajectories, summaries, memories).
+    v1.5：只删当前路径上的（其它支线的同序号内容不受影响）。"""
     from app.memory import store
 
+    on = True
     with session_scope() as s:
-        s.exec(delete(TurnRow).where(TurnRow.world_id == world_id, TurnRow.index >= turn))  # type: ignore[call-overload]
+        s.exec(delete(TurnRow).where(TurnRow.world_id == world_id, TurnRow.index >= turn, TurnRow.active == on))  # type: ignore[call-overload]
         # 上帝视角注入（injected）与手动推进（origin=tick）是独立于回合的干预，重试时保留
         s.exec(delete(EventRow).where(EventRow.world_id == world_id, EventRow.turn >= turn,  # type: ignore[call-overload]
-                                      EventRow.type != "injected", EventRow.origin != "tick"))
+                                      EventRow.type != "injected", EventRow.origin != "tick", EventRow.active == on))
         s.exec(delete(TrajectoryRow).where(TrajectoryRow.world_id == world_id, TrajectoryRow.turn >= turn,  # type: ignore[call-overload]
-                                           TrajectoryRow.origin != "tick"))
-        s.exec(delete(SummaryRow).where(SummaryRow.world_id == world_id, SummaryRow.to_turn >= turn))  # type: ignore[call-overload]
+                                           TrajectoryRow.origin != "tick", TrajectoryRow.active == on))
+        s.exec(delete(SummaryRow).where(SummaryRow.world_id == world_id, SummaryRow.to_turn >= turn,  # type: ignore[call-overload]
+                                        SummaryRow.active == on))
     store.delete_from_turn(world_id, turn)
 
 
 # ---------------------------------------------------------------- trajectories / summaries
 def add_trajectory(world_id: str, character_id: str, turn: int, location_id: str | None, action: str, mood: str,
-                   origin: str = "turn") -> None:
+                   origin: str = "turn", branch_id: str | None = None) -> None:
+    br = branch_tag(world_id, turn, branch_id)
     with session_scope() as s:
         s.add(TrajectoryRow(id=new_id("tr"), world_id=world_id, character_id=character_id, turn=turn,
-                            location_id=location_id, action=action, mood=mood, origin=origin))
+                            location_id=location_id, action=action, mood=mood, origin=origin, branch_id=br))
 
 
 def tick_events_since(world_id: str, turn: int) -> list[EventRow]:
     """回合 ``turn`` 之后（含）上帝视角手动推进产生、尚未被回合吸收的事件（时间正序）。"""
     with session_scope() as s:
         return list(s.exec(select(EventRow).where(EventRow.world_id == world_id, EventRow.origin == "tick",
-                                                  EventRow.turn >= turn).order_by(EventRow.timestamp)).all())
+                                                  EventRow.turn >= turn, EventRow.active == True)  # noqa: E712
+                           .order_by(EventRow.timestamp)).all())
 
 
 def list_trajectories(world_id: str, character_id: str | None = None) -> list[TrajectoryRow]:
     with session_scope() as s:
-        q = select(TrajectoryRow).where(TrajectoryRow.world_id == world_id)
+        q = select(TrajectoryRow).where(TrajectoryRow.world_id == world_id, TrajectoryRow.active == True)  # noqa: E712
         if character_id:
             q = q.where(TrajectoryRow.character_id == character_id)
         return list(s.exec(q.order_by(TrajectoryRow.turn, TrajectoryRow.timestamp)).all())
 
 
-def add_summary(world_id: str, chapter: int, from_turn: int, to_turn: int, summary: str) -> None:
+def add_summary(world_id: str, chapter: int, from_turn: int, to_turn: int, summary: str,
+                branch_id: str | None = None) -> None:
+    br = branch_tag(world_id, to_turn, branch_id)
     with session_scope() as s:
         s.add(SummaryRow(id=new_id("sm"), world_id=world_id, chapter=chapter, from_turn=from_turn,
-                         to_turn=to_turn, summary=summary))
+                         to_turn=to_turn, summary=summary, branch_id=br))
 
 
 def list_summaries(world_id: str) -> list[SummaryRow]:
     with session_scope() as s:
-        return list(s.exec(select(SummaryRow).where(SummaryRow.world_id == world_id).order_by(SummaryRow.chapter)).all())
+        return list(s.exec(select(SummaryRow).where(SummaryRow.world_id == world_id, SummaryRow.active == True)  # noqa: E712
+                           .order_by(SummaryRow.chapter)).all())
