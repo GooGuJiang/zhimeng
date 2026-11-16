@@ -81,3 +81,65 @@ Mock specs, QA `auth.spec.ts` and the full e2e all pass. Remaining asks, most im
    Keep `ZM_TRUSTED_PROXIES` on the backend limited to the frontend container / loopback.
 7. **Origins for non-3000 ports.** Write requests are Origin-checked. Test servers on other ports need
    `ZM_CORS_ORIGINS=http://localhost:<port>,...` (this works without code changes); worth a line in the README.
+
+
+## 5. Character branch choices & 剧情脉络 (2026-11-16, frontend)
+评审意见要「角色分支选择交互演示」。游玩页原先已有选项按钮和自由输入，并排除了 OpenUI `choice_list`
+（它会与按钮重复，且不展示后果提示）。前端现已按下面的最小契约实现交互与分支视图；**请后端实现选项提示
+与多线回溯**。在接口就绪之前，前端会降级：选项仍显示（缺 `hint` 时用本地短提示补上），脉络按
+`GET /turns` 画成只读单线，「另选一条」隐藏。
+
+### 已有、请保持并补齐
+- `Option = { id, text, hint? }`，`GET /worlds/{id}/options`，SSE `options` / `done.turn.options`，
+  `POST /worlds/{id}/turns { action, option_id, client_turn_id }` 均已对接。
+- **[need] 每回合 2–4 个选项，且每个都带简短中文 `hint`（后果提示，建议 ≤24 字）。**
+  兜底模式的 `options_for` 目前没有 `hint`，请一并补上，这样 `ZM_FORCE_FALLBACK=1` 录屏也能直接用。
+
+### 新增最小契约
+`GET /api/worlds/{id}/branches` →
+```json
+{
+  "current_node_id": "opening | <turn id>",
+  "nodes": [{
+    "id": "opening | <turn id>",
+    "parent_id": "opening | <turn id> | null",
+    "turn_id": "<turn id> | null",
+    "index": 0,
+    "chapter": 1,
+    "action": "玩家走到这里时的选择，开局为 null",
+    "choice_id": "opt_1 | null",
+    "summary": "给脉络看的短旁白，不超过约 40 字",
+    "line_id": "line_…",
+    "current": false
+  }],
+  "lines": [{ "id": "line_…", "leaf_id": "<node id>", "current": true }]
+}
+```
+开局节点的 `id` 固定为 `"opening"`（`turn_id` 为 null，`index` 为 0）。`GET /worlds/{id}/turns`
+只返回**当前这条线**上的回合（从开局到当前节点），不要把其它线上的回合混进来。
+
+`POST /api/worlds/{id}/branches/rewind`  body: `{ "to_node_id": "opening | <turn id>" }` → 200
+```json
+{ "current_node_id": "…", "options": [Option], "world": World }
+```
+把游玩游标回到该节点之后（世界状态、当前选项都恢复到那一步）。**不要删除其它线**——它们继续出现在
+`GET /branches` 里。下一次 `POST /turns` 若该节点已经有子节点，则开辟一条新线（分叉）；否则沿当前线继续。
+错误：节点不属于本世界时 404 `not_found`（文案用中文，如「找不到要回到的那一步」）。
+
+前端不会在界面上展示 `id` / `line_id` / `option_id` 等技术字段。未实现时请对这两个路径返回 404，
+前端即可降级，不必先占位 501。
+
+### 与后端现行实现的对齐（同一工作区，后端尚未提交）
+后端已经在本工作区实现了上述路径，并做了字段兼容（`current_node_id` / `lines` / `parent_id` /
+`summary` / `line_id` / `current` / `choice_id`），另外还有：
+- `POST /branches/checkout { turn_id }`（`rewind { to_node_id }` 是别名，`"opening"` 表示开局）
+- `GET /branches/path?turn_id=`（只预览、不切换）
+- 回溯响应还带 `world` / `turns` / `options` / `taken`
+- `Turn.parent_turn_id` / `branch_id`，`World.head_turn_id`；`GET /turns` 只返回当前路径（active=1）
+- `Option.hint` 与兜底 `fill_hints`；`TurnRequest.from_turn_id`、可只传 `option_id`
+
+前端已按草案字段读取，能对接这套实现。请后端把契约写入 API.md，并随自己的提交一起提交。
+前端**没有改、也不会提交**后端文件。
+
+### 其它
+配音长轮询仍走 `/api/assets/{id}?wait=`，本改动不涉及。录屏演示步骤见 TEAM.md 本节进度。
